@@ -1,0 +1,26 @@
+# NBA Fantasy Draft Optimiser - dependencies
+#
+# Minimum-version pins are used here so the project installs cleanly. After your
+# first successful install, run `pip freeze > requirements.txt` to lock exact
+# versions for reproducibility.
+
+# --- V1 (active) ---
+nba_api>=1.7.0          # NBA.com stats client (per-game box scores)
+pandas>=2.0.0           # data wrangling
+numpy>=1.24.0           # numerics (also an nba_api dependency)
+pyarrow>=14.0.0         # Parquet read/write cache layer
+
+# --- Testing (active from V1) ---
+pytest>=7.4.0           # leakage guard and baseline tests
+
+# --- V3+ (uncomment when reached) ---
+# (No new packages strictly required for the cheap positional-run heuristic.
+#  A full Monte Carlo engine needs only numpy, already listed above.)
+
+# --- V5 (active) ---
+yfpy>=15.0.0            # Yahoo Fantasy Sports API wrapper (live scoring, eligibility, draft)
+python-dotenv>=1.0.0   # load Yahoo credentials from a git-ignored .env
+plotnine>=0.13.0       # ggplot-grammar visualisation (aging curve, VOR, backtest)
+
+# --- V5 optional (not required for the project to function) ---
+# duckdb>=0.10.0        # optional SQL query layer over Parquet
