@@ -1,0 +1,43 @@
+# --- Secrets (NEVER commit) ---
+.env
+token.json
+*.token
+private.json
+
+# --- Data cache (disposable, re-pullable) ---
+data/
+*.parquet
+
+# --- Generated charts (re-renderable) ---
+outputs/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# --- Virtual environments ---
+.venv/
+venv/
+env/
+ENV/
+
+# --- Testing / tooling ---
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# --- Editors / OS ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- Jupyter (if used for exploration) ---
+.ipynb_checkpoints/

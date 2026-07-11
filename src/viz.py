@@ -1,0 +1,90 @@
+"""Presentation charts with plotnine (V5): aging curve, value-by-position, backtest.
+
+These render to PNGs under ``outputs/`` (git-ignored). They use only nba_api-derived
+data, so they run without any Yahoo credentials. A non-interactive matplotlib
+backend is forced so saving works in a headless/CLI context.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import matplotlib
+matplotlib.use("Agg")  # headless: render straight to file, no GUI
+
+import pandas as pd
+import plotnine as p9
+
+from src import columns as C
+
+OUTPUT_DIR: Path = Path(__file__).resolve().parent.parent / "outputs"
+
+
+def _ensure_output_dir() -> Path:
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    return OUTPUT_DIR
+
+
+def plot_aging_curve(curve: dict[int, float], target_season: str) -> Path:
+    """Line chart of the age -> PPG multiplier curve, flagging survivorship bias."""
+    data = pd.DataFrame({"age": list(curve), "multiplier": list(curve.values())})
+    plot = (
+        p9.ggplot(data, p9.aes("age", "multiplier"))
+        + p9.geom_hline(yintercept=1.0, linetype="dashed", colour="grey")
+        + p9.geom_line(colour="#2c7fb8", size=1)
+        + p9.geom_point(colour="#2c7fb8", size=2)
+        + p9.labs(
+            title=f"Aging curve (projecting {target_season})",
+            subtitle="Year-over-year PPG multiplier. Note survivorship bias: late-career "
+                     "decline is understated (curve flattens/rises at the oldest ages).",
+            x="Age", y="PPG multiplier (next season / this season)",
+        )
+        + p9.theme_minimal()
+    )
+    path = _ensure_output_dir() / "aging_curve.png"
+    plot.save(path, width=8, height=5, dpi=120, verbose=False)
+    return path
+
+
+def plot_value_by_position(board: pd.DataFrame, target_season: str) -> Path:
+    """Distribution of projected value by coarse position (positional scarcity)."""
+    data = board.loc[board[C.COL_COARSE_POSITION] != "UNK",
+                     [C.COL_COARSE_POSITION, C.COL_PROJECTED_PTS]]
+    plot = (
+        p9.ggplot(data, p9.aes(C.COL_COARSE_POSITION, C.COL_PROJECTED_PTS,
+                               fill=C.COL_COARSE_POSITION))
+        + p9.geom_boxplot(show_legend=False)
+        + p9.labs(
+            title=f"Projected value by position (projecting {target_season})",
+            subtitle="Why value-over-replacement matters: positions differ in depth.",
+            x="Coarse position", y="Projected fantasy points",
+        )
+        + p9.theme_minimal()
+    )
+    path = _ensure_output_dir() / "value_by_position.png"
+    plot.save(path, width=8, height=5, dpi=120, verbose=False)
+    return path
+
+
+def plot_backtest_distribution(multi_result: dict) -> Path:
+    """Grouped bars of the smart engine's margin over each benchmark, per season."""
+    rows = []
+    for r in multi_result["per_season"]:
+        rows.append({"season": r["season"], "benchmark": "vs prior totals", "margin": r["vs_prior"]})
+        rows.append({"season": r["season"], "benchmark": "vs ADP proxy", "margin": r["vs_adp"]})
+        rows.append({"season": r["season"], "benchmark": "vs random", "margin": r["vs_random"]})
+    data = pd.DataFrame(rows)
+    plot = (
+        p9.ggplot(data, p9.aes("season", "margin", fill="benchmark"))
+        + p9.geom_hline(yintercept=0.0, colour="grey")
+        + p9.geom_col(position="dodge")
+        + p9.labs(
+            title="V3 smart engine margin by season (starting-lineup points)",
+            subtitle="A multi-season distribution - a single season is high variance.",
+            x="Target season", y="Smart engine margin over benchmark",
+        )
+        + p9.theme_minimal()
+    )
+    path = _ensure_output_dir() / "backtest_distribution.png"
+    plot.save(path, width=9, height=5, dpi=120, verbose=False)
+    return path
