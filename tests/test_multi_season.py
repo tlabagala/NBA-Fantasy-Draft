@@ -47,7 +47,7 @@ def test_multi_season_reports_distribution_against_benchmarks() -> None:
     totals, bios, pos = _synthetic()
     targets = ["2022-23", "2023-24"]
     result = backtest.multi_season_backtest(
-        totals, bios, targets, config, positions_for=lambda s: pos)
+        totals, bios, targets, _league(), positions_for=lambda s: pos)
 
     assert result["summary"]["n_seasons"] == 2
     assert len(result["per_season"]) == 2

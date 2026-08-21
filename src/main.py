@@ -175,10 +175,15 @@ def main() -> None:
     import pandas as pd  # local: only needed to pretty-print the table
     print(pd.DataFrame(ms["per_season"]).to_string(index=False))
     s = ms["summary"]
+    print(f"   Smart engine vs random       : mean {s['vs_random_mean']:+,.1f} "
+          f"({s['pct_vs_random_mean']:+.1f}%, range {s['pct_vs_random_min']:+.1f}%.."
+          f"{s['pct_vs_random_max']:+.1f}%); wins {s['wins_vs_random']}/{s['n_seasons']} seasons")
     print(f"   Smart engine vs prior-totals : mean {s['vs_prior_mean']:+,.1f} "
-          f"(std {s['vs_prior_std']:,.1f}); wins {s['wins_vs_prior']}/{s['n_seasons']} seasons")
+          f"({s['pct_vs_prior_mean']:+.1f}%, std {s['vs_prior_std']:,.1f}); "
+          f"wins {s['wins_vs_prior']}/{s['n_seasons']} seasons")
     print(f"   Smart engine vs ADP proxy    : mean {s['vs_adp_mean']:+,.1f} "
-          f"(std {s['vs_adp_std']:,.1f}); wins {s['wins_vs_adp']}/{s['n_seasons']} seasons")
+          f"({s['pct_vs_adp_mean']:+.1f}%, std {s['vs_adp_std']:,.1f}); "
+          f"wins {s['wins_vs_adp']}/{s['n_seasons']} seasons")
 
     print("8. Rendering plotnine charts to outputs/ ...")
     curve = projection.build_aging_curve(totals, bios, config.TARGET_SEASON, config)
@@ -188,6 +193,7 @@ def main() -> None:
     chart_paths = [
         viz.plot_aging_curve(curve, config.TARGET_SEASON),
         viz.plot_value_by_position(v4_board, config.TARGET_SEASON),
+        viz.plot_projection_accuracy(cmp4),
         viz.plot_backtest_distribution(ms),
     ]
     for path in chart_paths:

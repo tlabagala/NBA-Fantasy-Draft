@@ -66,6 +66,37 @@ def plot_value_by_position(board: pd.DataFrame, target_season: str) -> Path:
     return path
 
 
+def plot_projection_accuracy(comparison: dict) -> Path:
+    """Bar chart of projection MAE by method - lower is better.
+
+    Takes the dict from :func:`src.backtest.compare_projection_accuracy_v4`.
+    """
+    labels = [("V1 prior total", "v1"), ("V2 PPG x GP", "v2"),
+              ("V4 aging", "v4_aging_only"), ("V4 shrink", "v4_shrink_only"),
+              ("V4 aging+shrink", "v4")]
+    data = pd.DataFrame({
+        "method": [label for label, _ in labels],
+        "mae": [comparison[key]["mae"] for _, key in labels],
+    })
+    data["method"] = pd.Categorical(data["method"], categories=data["method"], ordered=True)
+    plot = (
+        p9.ggplot(data, p9.aes("method", "mae", fill="method"))
+        + p9.geom_col(show_legend=False)
+        + p9.geom_text(p9.aes(label="mae"), va="bottom", size=9, format_string="{:.0f}")
+        + p9.labs(
+            title=f"Projection accuracy, target {comparison['target_season']} "
+                  f"(n={comparison['n_common']})",
+            subtitle="Mean absolute error - lower is better. The simple V1 baseline was never beaten.",
+            x="Method", y="MAE (fantasy points)",
+        )
+        + p9.theme_minimal()
+        + p9.theme(axis_text_x=p9.element_text(rotation=20, ha="right"))
+    )
+    path = _ensure_output_dir() / "projection_accuracy.png"
+    plot.save(path, width=8, height=5, dpi=120, verbose=False)
+    return path
+
+
 def plot_backtest_distribution(multi_result: dict) -> Path:
     """Grouped bars of the smart engine's margin over each benchmark, per season."""
     rows = []
