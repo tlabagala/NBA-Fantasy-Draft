@@ -24,3 +24,7 @@ plotnine>=0.13.0       # ggplot-grammar visualisation (aging curve, VOR, backtes
 
 # --- V5 optional (not required for the project to function) ---
 # duckdb>=0.10.0        # optional SQL query layer over Parquet
+
+# --- V7 (active) ---
+streamlit>=1.62.0       # draft-day web UI (installed 1.62.0; st.dataframe row-select and
+                        # st.selectbox fuzzy filtering both confirmed present at this version)

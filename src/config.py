@@ -97,8 +97,14 @@ ROSTER_SIZE: int = sum(ROSTER_SLOTS.values())
 # exist to score against) and must NOT be the earliest season (we need a prior
 # season to project from). The projection for TARGET_SEASON uses only seasons
 # strictly before it - enforced by the leakage guard in projection.py.
-SEASONS: list[str] = ["2021-22", "2022-23", "2023-24"]
-TARGET_SEASON: str = "2023-24"   # projected from 2022-23; scored on actual 2023-24
+SEASONS: list[str] = ["2021-22", "2022-23", "2023-24", "2024-25", "2025-26"]
+TARGET_SEASON: str = "2025-26"   # projected from prior seasons; scored on actual 2025-26
+
+# For a REAL live draft of an upcoming season (no actual data yet - e.g. "2026-27"
+# while SEASONS ends at "2025-26"), pass that season string directly as TARGET_SEASON
+# instead: the leakage guard only checks that no data FROM OR AFTER it was used, which
+# trivially holds when the season has not been played yet. src/app_ui.py's setup
+# screen offers this automatically via src.projection.next_season(SEASONS[-1]).
 
 # Regular season only (no playoffs) for both projection and scoring.
 SEASON_TYPE: str = "Regular Season"
