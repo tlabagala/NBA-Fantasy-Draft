@@ -138,6 +138,64 @@ def _positional_run_risk(
     return max(0.0, best_now - expected_next)
 
 
+def rank_candidates(
+    available_ids: list[int],
+    my_roster: list[int],
+    value_by_id: dict[int, float],
+    position_by_id: dict[int, str],
+    league,
+    gap_to_next_pick: int,
+    run_risk_weight: float | None = None,
+) -> list[tuple[int, float, float, float]]:
+    """Rank available players for my NEXT pick by marginal lineup value + run risk.
+
+    This is the core V3 decision rule, factored out so both the simulated
+    :func:`snake_draft_smart` backtest and a live, human-driven draft (each real
+    pick recorded as it happens) can share one scoring path.
+
+    Args:
+        available_ids: undrafted player ids, board-ordered (best first) - order
+            matters because :func:`_positional_run_risk` assumes it.
+        my_roster: player ids already on my team.
+        value_by_id, position_by_id: as elsewhere - projected value and coarse
+            position per player id.
+        league: the :mod:`src.config` module (roster slots, mappings, weight).
+        gap_to_next_pick: how many other teams pick before my next turn (0 if I am
+            on the clock right now).
+        run_risk_weight: overrides ``league.RUN_RISK_WEIGHT`` when given.
+
+    Returns:
+        ``[(player_id, marginal_value, run_risk, score), ...]`` sorted by ``score``
+        descending. ``score = marginal_value + weight * run_risk`` when the
+        candidate improves my lineup (``marginal_value > 0``), else just
+        ``marginal_value`` - run-risk never resurrects idle depth (a surplus guard
+        I cannot start).
+    """
+    weight = league.RUN_RISK_WEIGHT if run_risk_weight is None else run_risk_weight
+    base = lineup_mod.optimal_lineup_value(my_roster, value_by_id, position_by_id, league)
+
+    scored: list[tuple[int, float, float, float]] = []
+    for cand in available_ids:
+        marginal = (
+            lineup_mod.optimal_lineup_value(my_roster + [cand], value_by_id,
+                                            position_by_id, league)
+            - base
+        )
+        if marginal > 0:
+            run = _positional_run_risk(
+                position_by_id.get(cand, pos_mod.UNKNOWN_POSITION), available_ids,
+                value_by_id, position_by_id, gap_to_next_pick,
+            )
+            score = marginal + weight * run
+        else:
+            run = 0.0
+            score = marginal
+        scored.append((cand, marginal, run, score))
+
+    scored.sort(key=lambda row: row[3], reverse=True)
+    return scored
+
+
 def snake_draft_smart(
     board: pd.DataFrame,
     n_teams: int,
@@ -150,7 +208,8 @@ def snake_draft_smart(
     """Simulate a snake draft where my picks use the V3 smart engine.
 
     At each of my picks I take the candidate maximising
-    ``marginal_lineup_value + run_risk_weight x positional_run_risk``:
+    ``marginal_lineup_value + run_risk_weight x positional_run_risk``
+    (see :func:`rank_candidates`):
 
     - **Marginal lineup value** - how much the candidate improves my best legal
       starting lineup given the slots I have already filled. This stops me
@@ -174,7 +233,6 @@ def snake_draft_smart(
     """
     if my_slot < 1 or my_slot > n_teams:
         raise ValueError(f"my_slot {my_slot} must be within 1..{n_teams}.")
-    weight = league.RUN_RISK_WEIGHT if run_risk_weight is None else run_risk_weight
 
     order = snake_pick_order(n_teams, roster_size)
     gaps = _gaps_to_next_my_pick(order, my_slot)
@@ -191,27 +249,10 @@ def snake_draft_smart(
         if team_slot != my_slot:
             rosters[team_slot].append(available.pop(0))  # greedy opponent: top available
             continue
-        my_roster = rosters[my_slot]
-        base = lineup_mod.optimal_lineup_value(my_roster, value_by_id, position_by_id, league)
         gap = gaps.get(idx, 0)
-        best_id, best_score = available[0], float("-inf")
-        for cand in available:
-            marginal = (
-                lineup_mod.optimal_lineup_value(my_roster + [cand], value_by_id,
-                                                position_by_id, league)
-                - base
-            )
-            # Positional-run risk only matters for candidates who actually improve my
-            # lineup; it must never resurrect idle depth (a surplus guard I cannot
-            # start), so it is gated on positive marginal value.
-            if marginal > 0:
-                run = _positional_run_risk(position_by_id[cand], available, value_by_id,
-                                           position_by_id, gap)
-                score = marginal + weight * run
-            else:
-                score = marginal
-            if score > best_score:
-                best_id, best_score = cand, score
+        ranked = rank_candidates(available, rosters[my_slot], value_by_id,
+                                 position_by_id, league, gap, run_risk_weight)
+        best_id = ranked[0][0]
         available.remove(best_id)
         rosters[my_slot].append(best_id)
 

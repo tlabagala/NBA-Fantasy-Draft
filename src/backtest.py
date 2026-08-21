@@ -378,6 +378,10 @@ def multi_season_backtest(totals: pd.DataFrame, bios: pd.DataFrame,
             for t in range(league.RANDOM_BASELINE_TRIALS)
         ]
         random_mean = float(pd.Series(randoms).mean())
+        def _pct(baseline: float) -> float:
+            """Percentage improvement of the smart engine over a baseline."""
+            return round((smart - baseline) / baseline * 100, 1) if baseline else float("nan")
+
         rows.append({
             "season": target,
             "smart": round(smart, 1),
@@ -387,6 +391,9 @@ def multi_season_backtest(totals: pd.DataFrame, bios: pd.DataFrame,
             "vs_prior": round(smart - prior, 1),
             "vs_adp": round(smart - adp, 1),
             "vs_random": round(smart - random_mean, 1),
+            "pct_vs_prior": _pct(prior),
+            "pct_vs_adp": _pct(adp),
+            "pct_vs_random": _pct(random_mean),
         })
 
     df = pd.DataFrame(rows)
@@ -397,8 +404,14 @@ def multi_season_backtest(totals: pd.DataFrame, bios: pd.DataFrame,
         "vs_adp_mean": round(float(df["vs_adp"].mean()), 1),
         "vs_adp_std": round(float(df["vs_adp"].std(ddof=0)), 1),
         "vs_random_mean": round(float(df["vs_random"].mean()), 1),
+        "pct_vs_prior_mean": round(float(df["pct_vs_prior"].mean()), 1),
+        "pct_vs_adp_mean": round(float(df["pct_vs_adp"].mean()), 1),
+        "pct_vs_random_mean": round(float(df["pct_vs_random"].mean()), 1),
+        "pct_vs_random_min": round(float(df["pct_vs_random"].min()), 1),
+        "pct_vs_random_max": round(float(df["pct_vs_random"].max()), 1),
         "wins_vs_prior": int((df["vs_prior"] > 0).sum()),
         "wins_vs_adp": int((df["vs_adp"] > 0).sum()),
+        "wins_vs_random": int((df["vs_random"] > 0).sum()),
         "n_seasons": len(df),
     }
     return {"per_season": rows, "summary": summary}
