@@ -6,10 +6,13 @@ board, simulates the snake draft, and validates the whole thing on past seasons
 without data leakage.
 
 This repository is built in strict version order, per
-[`nba_draft_optimiser_masterdoc.md`](nba_draft_optimiser_masterdoc.md). **All five
-versions are built (V1-V5).** The one step that remains is yours: the one-time
-Yahoo OAuth authorisation that switches the pipeline from placeholder league
-settings to your live ones (see [V5](#v5---yahoo-integration-multi-season-distribution-and-presentation)).
+[`nba_draft_optimiser_masterdoc.md`](nba_draft_optimiser_masterdoc.md), plus two
+usability layers beyond the original spec: a live draft-day CLI
+([V6](#v6---live-draft-assistant-srclive_draftpy)) and a Streamlit web UI over it
+([V7](#v7---draft-day-web-ui-srcapp_uipy-draft_apppy)). **V1-V7 are all built.**
+The one step that remains is yours: the one-time Yahoo OAuth authorisation that
+switches the pipeline from placeholder league settings to your live ones (see
+[V5](#v5---yahoo-integration-multi-season-distribution-and-presentation)).
 
 ## Honest framing
 
@@ -312,6 +315,160 @@ Known limitation: recommendations still assume *my* remaining picks are the only
 ones being optimised - there is still no model of what an opponent will do next
 (the same V3 limitation, now live instead of simulated).
 
+## V7 - draft-day web UI ([`src/app_ui.py`](src/app_ui.py), [`draft_app.py`](draft_app.py))
+
+V6 works, but a real 12-team, 13-round draft is roughly 156 picks against a clock,
+eleven of every twelve somebody else's, and typing each one by hand under time
+pressure is the actual bottleneck - not the model. V7 changes nothing about the
+projection, board or recommendation logic; it is an entry-speed and situational-
+awareness layer over the exact same `LiveDraftState` V6 already validates.
+
+**V7 is a local, single-user tool with no authentication, no database and no
+deployment** - it is meant to run on your own laptop during your own draft, not
+to be shared or hosted. It carries the same opponent-model limitation as V3/V6:
+recommendations optimise for me alone, with a cheap positional-run heuristic
+standing in for what opponents will actually do next, not a full simulation.
+
+### Run it
+
+```bash
+streamlit run draft_app.py
+```
+
+The entry point is deliberately at the repo root rather than inside `src/`:
+`streamlit run` puts the *script's own directory* on `sys.path`, and a script
+inside `src/` cannot then resolve `from src import ...`. `draft_app.py` is a
+three-line shim; all real UI logic lives in `src/app_ui.py`.
+
+### League configuration, on the setup screen
+
+`config.py` ships with four settings explicitly marked as PLACEHOLDERS in its own
+header - `SCORING`, `NUM_TEAMS`, `ROSTER_SLOTS` and `MY_DRAFT_SLOT` - and editing
+Python to fill them in was the main friction point before drafting live. The
+setup screen now exposes all four directly, plus `TARGET_SEASON` and the V4
+aging/shrinkage toggles, as an `st.form` (one rerun on submit, not one per
+keystroke across ~24 fields):
+
+- **Draft position, team count, target season** - the season selector offers every
+  completed season in `config.SEASONS` (for a backtest-style sanity check against
+  real results) plus the season right after the most recent one
+  (`src.projection.next_season(SEASONS[-1])`), selected by default: the actual
+  upcoming, not-yet-played season, which is the real live-draft case. As of this
+  writing `config.SEASONS` runs through `"2025-26"` (now complete), so the
+  default target is `"2026-27"`. The leakage guard only checks that no data FROM
+  OR AFTER the target season was used, which trivially holds for a season with no
+  games yet - no engine change was needed for this. The one real limitation: a
+  season with zero games has no rookie signal at all (an existing, documented V1
+  limitation, just more visible here since every player must come from prior-
+  season data).
+- **Roster slots** - a count per standard Yahoo slot (PG/SG/SF/PF/C/G/F/UTIL/BN),
+  pre-filled from `config.ROSTER_SLOTS`.
+- **Scoring** - a point value per stat (PTS/REB/AST/STL/BLK/TOV/FGM/FGA/FTM/FTA/
+  FG3M/FG3A), pre-filled from `config.SCORING`.
+- **Advanced (collapsed by default):** the V4 aging-curve and shrinkage toggles.
+
+None of this is an engine change - `build_board_bundle` and `LiveDraftState`
+already took `league` as a duck-typed parameter (every test in
+`tests/test_draft_smart.py` and `tests/test_live_draft.py` passes a
+`types.SimpleNamespace` stand-in, not the real `config` module), so the setup
+screen just builds one from the submitted form instead of importing `config`
+directly. **Two settings are deliberately NOT exposed**: `N_PROJECTION_SEASONS`
+and `GP_RECENCY_DECAY`. Reading `src/projection.py` confirms `project_v4` calls
+`project_v2(totals, target_season)` with no override, so those two are always
+read from the literal `config` module regardless of what `league` object is
+passed in - a slider that silently did nothing would be worse than no slider.
+
+Because the board depends on these settings now, not just on the draft slot, the
+cache key had to grow to match: `_cached_board_bundle` is keyed on the scoring
+dict, roster slots, team count, target season, and the two V4 flags (all
+hashable), with the `league` object itself passed unhashed - changing any
+setting on the setup screen correctly rebuilds the board rather than serving a
+stale one from a previous session's settings (verified directly: two different
+`SCORING["PTS"]` values produce two different top-of-board values in the same
+process, and re-requesting the same settings is a cache hit).
+
+Resuming a saved draft intentionally does NOT restore custom league settings -
+the saved JSON only ever stored `n_teams`, `roster_size`, `my_slot` and the pick
+log (unchanged by this addition), so a resumed session rebuilds the board from
+whatever `config.py` says today. The setup screen says so explicitly.
+
+### What it adds over the CLI
+
+- **Type-to-search, click-to-record** for every pick, mine or an opponent's -
+  Streamlit's fuzzy filter narrowed 711 players to a single match on a five-
+  character partial name (`"Jokic"` -> Nikola Jokić) in real-browser testing, and
+  because only players Streamlit itself lists are selectable, a typo can no
+  longer silently record the wrong player - a real failure mode in the CLI, where
+  a partial name that happens to substring-match an unintended player would be
+  drafted without complaint. This is the concrete, verifiable way V7 beats the
+  CLI: not a claimed speed number, but a structurally eliminated error class.
+- **Click-to-draft recommendations** - the same top-10 table V6 prints, now a
+  clickable `st.dataframe` (row-select, wired via `on_select`) that drafts the
+  clicked player for me, but only while I am actually on the clock - otherwise
+  it renders read-only so a click can never mis-attribute a pick to whichever
+  team happens to be up.
+- **A status strip**: round and overall pick, who is on the clock, picks until my
+  next turn (`gap_to_my_next_pick()` - already computed by V6 but never
+  surfaced there), and unfilled starter slots by position.
+- **Board and Search tabs** - the board with a G/F/C filter, and a name search
+  that (unlike `LiveDraftState.find_player`, available players only) also shows
+  drafted players with their status (`TAKEN - team 4, pick 22`) rather than
+  reading like a typo.
+- **The `RUN_RISK_WEIGHT` and top-n as live sliders**, so the positional-run
+  aggressiveness can be tuned mid-draft rather than only in `config.py`.
+- **Autosave on every pick plus an explicit resume prompt on launch.**
+  `st.session_state` does not survive a browser refresh or a killed server -
+  only the JSON file does. Declining to resume no longer silently destroys the
+  old session either: the previous file is backed up to a timestamped
+  `.bak-<timestamp>.json` before a fresh session's first pick can overwrite it
+  (the same fix applied to the CLI). A second bug fixed in both interfaces:
+  `undo` previously did not re-save, so an undone pick could survive on disk if
+  the process died before the next pick's autosave.
+
+### Engine change (the only one V7 makes)
+
+`build_live_draft` was split into a slot-independent
+[`build_board_bundle`](src/live_draft.py) (ingest -> scoring -> V4 projection ->
+value-over-replacement board) plus the cheap per-slot `LiveDraftState`
+construction. `build_live_draft`'s signature and behaviour are unchanged and
+still covered by `tests/test_live_draft.py`. The Streamlit layer wraps
+`build_board_bundle` in `st.cache_data` (which copies its return value on every
+read, so nothing mutable ever leaks across cache reads) and holds
+`LiveDraftState` only in `st.session_state`, never in `st.cache_resource` -
+that cache does NOT copy its return value, and `record_pick` mutates the state
+in place, so caching it that way would corrupt it across sessions.
+`recommend()` is memoised keyed on the full pick log (not bare `pick_index`
+alone, as an undo followed by a different pick can revisit the same pick_index
+with a different roster - the pick log is what actually determines the result).
+
+### Verification method (and its limits)
+
+Real end-to-end behaviour was confirmed in an actual Chrome browser against a
+running server: the setup screen, cold board build (0.21s from the Parquet
+cache), click-to-draft, and type-to-search-and-select all work as described
+above, screenshotted at each step. Streamlit's own `AppTest` harness confirmed
+the caching spine (no rebuild on a slider interaction) and ten consecutive real
+opponent picks with no crashes or duplicates - but `AppTest` driving a full
+156-pick draft through actual page reruns turned out to carry a large fixed
+per-rerun cost in this environment unrelated to this app's logic, so the full
+156-pick, duplicate-free, both-interfaces-agree verification below instead
+calls `src/app_ui.py`'s own callback functions directly (`_opponent_pick_callback`,
+`_recommend_click_callback`, `_undo_callback`) against a lightweight
+`st.session_state` double - the same functions Streamlit wires to the widgets,
+just without paying to re-render the whole page 156 times:
+
+- A full 156-pick draft via these callbacks completes with zero errors, no
+  duplicate or missing players, and every team ends with exactly 13.
+- The autosaved file matches the in-memory pick log after every single pick.
+- A stale/duplicate callback firing for an already-recorded pick is a no-op
+  (the double-submit guard).
+- `undo` removes the pick from memory AND the saved file.
+- A brand-new session built only from the saved file resumes with every pick
+  intact (simulating a killed server and a fresh browser tab).
+- Given an identical pick log, the CLI's `LiveDraftState.recommend()` and the
+  UI's cached `_cached_recommend()` return an *identical* top-10 - the UI has
+  not changed engine behaviour.
+
 ## Project overview notebook
 
 [`project_overview.ipynb`](project_overview.ipynb) is a high-level walkthrough -
@@ -385,7 +542,13 @@ First run pulls from `nba_api` and caches to `data/`; later runs read the cache.
 - `test_live_draft.py` - draft-position selection drives the pick clock; recording
   real picks (for any team) shrinks the board and advances the clock; undo and
   out-of-turn corrections; recommendations track the true remaining board and never
-  resurrect idle depth; name search; save/resume round-trips.
+  resurrect idle depth; name search; save/resume round-trips. Unchanged by V7 -
+  its whole point is proving the engine underneath the UI still behaves.
+
+V7 (`src/app_ui.py`) deliberately has no `pytest` suite of its own - see
+[V7's verification method](#verification-method-and-its-limits) for how it was
+checked instead (a real browser session plus a direct-callback harness), rather
+than adding Streamlit-specific tests that would need their own maintenance.
 
 ## Known limitations
 
@@ -425,9 +588,10 @@ First run pulls from `nba_api` and caches to `data/`; later runs read the cache.
 - **Only three seasons** feed the multi-season distribution by default. More
   history would tighten every estimate, especially the aging curve.
 
-## Repository layout (V1 - V6)
+## Repository layout (V1 - V7)
 
 ```
+draft_app.py     V7: root shim for `streamlit run draft_app.py` (3 lines)
 src/
   config.py      scoring, league, seasons, V2-V5 params (PLACEHOLDERS marked)
   columns.py     named constants for the verified nba_api column names
@@ -442,9 +606,11 @@ src/
   yahoo.py       V5: live yfpy league settings, eligibility, draft results
   reconcile.py   V5: nba_api <-> Yahoo player join, unmatched surfaced
   viz.py         V5: plotnine charts -> outputs/
-  live_draft.py  V6: interactive draft assistant for a REAL live draft (CLI)
+  live_draft.py  V6: interactive draft assistant for a REAL live draft (CLI);
+                 V7 split out build_board_bundle() (slot-independent, cacheable)
+  app_ui.py      V7: Streamlit UI logic - all of it lives here, not in draft_app.py
   main.py        CLI entry point (runs V1-V5, reports every comparison)
-tests/           13 test modules, 43 tests (see the Test section)
+tests/           13 test modules, 43 tests (see the Test section; unchanged by V7)
 project_overview.ipynb   high-level walkthrough with charts
 .env.example     Yahoo credential template (copy to git-ignored .env)
 data/            Parquet cache (git-ignored, disposable)

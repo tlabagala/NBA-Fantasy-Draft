@@ -22,7 +22,9 @@ Run ``python -m src.live_draft`` for the interactive CLI.
 from __future__ import annotations
 
 import json
+import shutil
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -37,6 +39,27 @@ from src import positions as pos_mod
 from src import reconcile
 
 STATE_PATH = Path(__file__).resolve().parent.parent / "outputs" / "live_draft_state.json"
+
+
+def backup_state_file(path: Path | None = None) -> Path | None:
+    """Copy an existing saved draft to a timestamped sibling file, if one exists.
+
+    Declining to resume a saved draft must not silently destroy it: the FIRST new
+    pick of a fresh session calls :meth:`LiveDraftState.save`, which overwrites
+    ``path`` unconditionally. Call this before starting a fresh session so the old
+    progress survives under a ``.bak-<timestamp>.json`` name. Shared by the CLI and
+    the Streamlit app (V7) so both fix the same defect the same way.
+
+    Returns:
+        The backup path, or ``None`` if there was nothing to back up.
+    """
+    path = path if path is not None else STATE_PATH
+    if not path.exists():
+        return None
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup_path = path.with_suffix(f".bak-{stamp}.json")
+    shutil.copy2(path, backup_path)
+    return backup_path
 
 
 @dataclass
@@ -216,21 +239,24 @@ class LiveDraftState:
             self.record_pick(pid, team_slot=team)
 
 
-def build_live_draft(my_slot: int | None = None, league=config) -> LiveDraftState:
-    """Build a fresh :class:`LiveDraftState` from the same pipeline as ``main.py``.
+def build_board_bundle(
+    league=config,
+) -> tuple[list[int], dict[int, float], dict[int, str], dict[int, str]]:
+    """Run the ingest -> scoring -> projection -> board pipeline (slot-independent).
 
-    Runs ingestion -> scoring -> V4 projection (aging, no shrinkage per the
-    measured V4 default) -> coarse positions -> value-over-replacement board, then
-    hands back an empty draft ready for :meth:`LiveDraftState.record_pick`.
+    This is every step of :func:`build_live_draft` that does NOT depend on which
+    slot I am drafting from - factored out so a caller (V7's Streamlit layer) can
+    cache the expensive part once per session and cheaply rebuild the draft state
+    if the slot changes, without re-running ingestion or projection.
 
     Args:
-        my_slot: my 1-based draft position; defaults to ``league.MY_DRAFT_SLOT``.
         league: the :mod:`src.config` module (or a compatible namespace/test double).
-    """
-    slot = league.MY_DRAFT_SLOT if my_slot is None else my_slot
-    if slot < 1 or slot > league.NUM_TEAMS:
-        raise ValueError(f"my_slot {slot} must be within 1..{league.NUM_TEAMS}.")
 
+    Returns:
+        ``(board_ids, value_by_id, position_by_id, name_by_id)`` - the ranked
+        player id list (best first) and the three per-player lookups
+        :class:`LiveDraftState` needs.
+    """
     scoring_weights = league.SCORING
     logs = ingest.load_player_logs(league.SEASONS)
     totals = scoring.season_totals(scoring.apply_scoring(logs, scoring_weights))
@@ -251,6 +277,27 @@ def build_live_draft(my_slot: int | None = None, league=config) -> LiveDraftStat
     value_by_id = dict(zip(board[C.COL_PLAYER_ID], board[C.COL_PROJECTED_PTS]))
     position_by_id = dict(zip(board[C.COL_PLAYER_ID], board[C.COL_COARSE_POSITION]))
     name_by_id = dict(zip(board[C.COL_PLAYER_ID], board[C.COL_PLAYER_NAME]))
+    return board_ids, value_by_id, position_by_id, name_by_id
+
+
+def build_live_draft(my_slot: int | None = None, league=config) -> LiveDraftState:
+    """Build a fresh :class:`LiveDraftState` from the same pipeline as ``main.py``.
+
+    Runs :func:`build_board_bundle` (ingestion -> scoring -> V4 projection ->
+    value-over-replacement board), then hands back an empty draft ready for
+    :meth:`LiveDraftState.record_pick`. Signature and behaviour are unchanged by
+    the V7 refactor - only the slot-independent half moved into
+    :func:`build_board_bundle` so it can be cached separately.
+
+    Args:
+        my_slot: my 1-based draft position; defaults to ``league.MY_DRAFT_SLOT``.
+        league: the :mod:`src.config` module (or a compatible namespace/test double).
+    """
+    slot = league.MY_DRAFT_SLOT if my_slot is None else my_slot
+    if slot < 1 or slot > league.NUM_TEAMS:
+        raise ValueError(f"my_slot {slot} must be within 1..{league.NUM_TEAMS}.")
+
+    board_ids, value_by_id, position_by_id, name_by_id = build_board_bundle(league)
 
     order = draft_mod.snake_pick_order(league.NUM_TEAMS, league.ROSTER_SIZE)
     return LiveDraftState(
@@ -337,6 +384,12 @@ def run_cli() -> None:
         answer = input(f"Found saved progress at {STATE_PATH}. Resume it? [y/N] ").strip().lower()
         if answer == "y":
             resume = json.loads(STATE_PATH.read_text(encoding="utf-8"))
+        else:
+            # Starting fresh would otherwise silently overwrite this file on the
+            # very first pick - back it up first.
+            backup_path = backup_state_file()
+            if backup_path:
+                print(f"Starting fresh; previous progress backed up to {backup_path}.")
 
     if resume:
         my_slot = resume["my_slot"]
@@ -384,7 +437,11 @@ def run_cli() -> None:
                 print(f"Saved to {path}.")
             elif cmd == "undo":
                 undone = state.undo_last_pick()
-                print(f"Undid pick {undone}" if undone else "Nothing to undo.")
+                if undone:
+                    state.save()  # re-save immediately - an undone pick must not survive on disk
+                    print(f"Undid pick {undone}")
+                else:
+                    print("Nothing to undo.")
             elif cmd == "board":
                 n = int(args[0]) if args else 15
                 _print_board(state, n)
