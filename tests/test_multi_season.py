@@ -52,12 +52,30 @@ def test_multi_season_reports_distribution_against_benchmarks() -> None:
     assert result["summary"]["n_seasons"] == 2
     assert len(result["per_season"]) == 2
     for row in result["per_season"]:
-        for key in ("smart", "prior_totals", "adp_proxy", "random_mean",
-                    "vs_prior", "vs_adp", "vs_random"):
+        for key in ("smart", "prior_totals", "adp_proxy", "random_floor",
+                    "vs_prior", "vs_adp", "vs_random_floor"):
             assert key in row
-        # The engine should beat a random draft on the lineup objective.
-        assert row["vs_random"] > 0
+        # The engine should clear the random floor on the lineup objective.
+        assert row["vs_random_floor"] > 0
 
     s = result["summary"]
-    for key in ("vs_prior_mean", "vs_adp_mean", "vs_random_mean", "wins_vs_prior"):
+    for key in ("vs_prior_mean", "vs_adp_mean", "vs_random_floor_mean",
+                "wins_vs_prior", "baseline"):
         assert key in s
+
+
+def test_naive_baseline_leads_the_reported_columns() -> None:
+    """Reporting order encodes the demotion: naive baseline first, random last.
+
+    Anything that renders these rows column-wise (main.py, the notebook, a
+    DataFrame dump) inherits the order, so it is worth pinning.
+    """
+    totals, bios, pos = _synthetic()
+    result = backtest.multi_season_backtest(
+        totals, bios, ["2023-24"], _league(), positions_for=lambda s: pos)
+
+    keys = list(result["per_season"][0])
+    assert keys.index("prior_totals") < keys.index("adp_proxy")
+    assert keys.index("adp_proxy") < keys.index("random_floor")
+    assert keys.index("random_floor") == len(keys) - 3
+    assert result["summary"]["baseline"] == backtest.NAIVE_BASELINE_LABEL

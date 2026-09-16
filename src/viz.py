@@ -98,20 +98,34 @@ def plot_projection_accuracy(comparison: dict) -> Path:
 
 
 def plot_backtest_distribution(multi_result: dict) -> Path:
-    """Grouped bars of the smart engine's margin over each benchmark, per season."""
-    rows = []
-    for r in multi_result["per_season"]:
-        rows.append({"season": r["season"], "benchmark": "vs prior totals", "margin": r["vs_prior"]})
-        rows.append({"season": r["season"], "benchmark": "vs ADP proxy", "margin": r["vs_adp"]})
-        rows.append({"season": r["season"], "benchmark": "vs random", "margin": r["vs_random"]})
-    data = pd.DataFrame(rows)
+    """Grouped bars of the smart engine's margin over each benchmark, per season.
+
+    Benchmarks are ordered (and the legend follows) with the naive baseline first
+    and the random floor last, so the chart cannot be read as though beating random
+    were the result.
+    """
+    labels = [
+        ("vs naive baseline (prior totals)", "vs_prior"),
+        ("vs ADP proxy", "vs_adp"),
+        ("vs random (floor only)", "vs_random_floor"),
+    ]
+    rows = [
+        {"season": r["season"], "benchmark": label, "margin": r[key]}
+        for r in multi_result["per_season"]
+        for label, key in labels
+    ]
+    data = pd.DataFrame(rows).assign(
+        benchmark=lambda df: pd.Categorical(
+            df["benchmark"], categories=[label for label, _ in labels], ordered=True)
+    )
     plot = (
         p9.ggplot(data, p9.aes("season", "margin", fill="benchmark"))
         + p9.geom_hline(yintercept=0.0, colour="grey")
         + p9.geom_col(position="dodge")
         + p9.labs(
             title="V3 smart engine margin by season (starting-lineup points)",
-            subtitle="A multi-season distribution - a single season is high variance.",
+            subtitle="Baseline = the naive prior-season-totals draft. "
+                     "A single season is high variance.",
             x="Target season", y="Smart engine margin over benchmark",
         )
         + p9.theme_minimal()

@@ -82,15 +82,18 @@ def main() -> None:
     print("2. Applying scoring and aggregating to season totals ...")
     totals = scoring.season_totals(scoring.apply_scoring(logs, scoring_weights))
 
-    # --- Projection accuracy: V1 vs V2, time-ordered MAE/RMSE -------------
-    print("3. Evaluating projection accuracy (time-ordered MAE/RMSE) ...")
+    # --- Projection accuracy: V1 vs V2, time-ordered (error + rank) --------
+    print("3. Evaluating projection accuracy (time-ordered; error, association "
+          "and ranking) ...")
     target_cmp = backtest.compare_projection_accuracy(totals, config.TARGET_SEASON, config)
     print(f"   Target {target_cmp['target_season']} "
           f"(n={target_cmp['n_common']} players scored on both):")
     print(f"     V1 (prior total)   MAE {target_cmp['v1']['mae']:>7,.1f}  "
-          f"RMSE {target_cmp['v1']['rmse']:>7,.1f}")
+          f"RMSE {target_cmp['v1']['rmse']:>7,.1f}  "
+          f"Spearman {target_cmp['v1']['spearman']:.3f}")
     print(f"     V2 (PPG x GP)      MAE {target_cmp['v2']['mae']:>7,.1f}  "
-          f"RMSE {target_cmp['v2']['rmse']:>7,.1f}")
+          f"RMSE {target_cmp['v2']['rmse']:>7,.1f}  "
+          f"Spearman {target_cmp['v2']['spearman']:.3f}")
     pooled = backtest.evaluate_projection_seasons(totals, config)
     if len(pooled) > 1:
         v1_mae = sum(r["v1"]["mae"] * r["n_common"] for r in pooled) / sum(r["n_common"] for r in pooled)
@@ -114,17 +117,34 @@ def main() -> None:
         totals, config.TARGET_SEASON, bios, position_map, config)
     print(f"    Target {cmp4['target_season']} (n={cmp4['n_common']}, "
           f"{cmp4['n_unknown_age']} players without an age):")
-    for label, key in [("V1 prior total", "v1"), ("V2 PPG x GP", "v2"),
-                       ("V4 aging only", "v4_aging_only"),
-                       ("V4 shrink only", "v4_shrink_only"),
-                       ("V4 aging+shrink", "v4")]:
-        print(f"      {label:<16} MAE {cmp4[key]['mae']:>7,.1f}  "
-              f"RMSE {cmp4[key]['rmse']:>7,.1f}")
+    variants = [("V1 prior total", "v1"), ("V2 PPG x GP", "v2"),
+                ("V4 aging only", "v4_aging_only"),
+                ("V4 shrink only", "v4_shrink_only"),
+                ("V4 aging+shrink", "v4")]
+    # MAE alone is a weak test here: the board is a RANKING, and only the top
+    # NUM_TEAMS x ROSTER_SIZE players are ever drafted. Report three families.
+    print(f"      {'variant':<16} {'MAE':>7} {'RMSE':>7} {'MedAE':>7} {'bias':>7}"
+          f" | {'Spear':>6} {'R2':>6} | {'P@k':>5} {'NDCG':>5} {'P@rd1':>6}")
+    print("      " + "-" * 82)
+    for label, key in variants:
+        m = cmp4[key]
+        print(f"      {label:<16} {m['mae']:>7,.1f} {m['rmse']:>7,.1f} "
+              f"{m['medae']:>7,.1f} {m['bias']:>+7,.1f} | "
+              f"{m['spearman']:>6.3f} {m['r2']:>6.3f} | "
+              f"{m['precision_at_k']:>5.3f} {m['ndcg_at_k']:>5.3f} "
+              f"{m['precision_at_round1']:>6.3f}")
+    print(f"      (k = {config.NUM_TEAMS * config.ROSTER_SIZE} drafted players, "
+          f"round 1 = {config.NUM_TEAMS}. MAE/RMSE/MedAE/bias lower is better; "
+          f"the rest higher.")
+    print("       bias is SIGNED - positive means the projection over-predicts, "
+          "which MAE cannot show.")
+    print("       Spearman and P@k are the closest thing to 'is this a good draft "
+          "board'.)")
 
-    # --- Drafts: V1 board, V2 VOR board, random baseline ------------------
-    print(f"5. Backtesting {config.TARGET_SEASON}: V1 greedy, V2 greedy, and "
-          f"{config.RANDOM_BASELINE_TRIALS} random drafts ...")
-    res_v1 = backtest.backtest_v1(totals, config.TARGET_SEASON, config)
+    # --- Drafts: naive baseline, V2 VOR board, random floor ----------------
+    print(f"5. Backtesting {config.TARGET_SEASON} against the NAIVE BASELINE "
+          f"(prior-season-totals draft) ...")
+    res_base = backtest.backtest_naive_baseline(totals, config.TARGET_SEASON, config)
     res_v2 = backtest.backtest_v2(totals, config.TARGET_SEASON, config, position_map)
 
     print("-" * 72)
@@ -137,14 +157,17 @@ def main() -> None:
 
     print("-" * 72)
     print("Actual-season roster totals (higher is better):")
-    print(f"  Random baseline (mean) : {res_v1['random_mean']:>10,.1f}  "
-          f"(std {res_v1['random_std']:,.1f}, n={res_v1['n_trials']})")
-    print(f"  V1 greedy (prior total): {res_v1['greedy_total']:>10,.1f}  "
-          f"(margin vs random {res_v1['greedy_total'] - res_v1['random_mean']:+,.1f})")
-    print(f"  V2 greedy (PPGxGP+VOR) : {res_v2['greedy_total']:>10,.1f}  "
-          f"(margin vs random {res_v2['greedy_total'] - res_v1['random_mean']:+,.1f})")
-    v2_vs_v1 = res_v2["greedy_total"] - res_v1["greedy_total"]
-    print(f"  V2 - V1 margin         : {v2_vs_v1:>+10,.1f}")
+    floor_label = f"Random floor (mean, n={res_base['n_floor_trials']})"
+    print(f"  {'Naive baseline (prior totals)':<29} : "
+          f"{res_base['naive_total']:>10,.1f}  <- BASELINE  (this IS the V1 draft)")
+    print(f"  {'V2 greedy (PPGxGP+VOR)':<29} : {res_v2['greedy_total']:>10,.1f}  "
+          f"({res_v2['margin_vs_naive']:+,.1f} vs naive, "
+          f"{res_v2['pct_vs_naive']:+.1f}%)")
+    v2_vs_naive = res_v2["margin_vs_naive"]
+    print("  " + "-" * 68)
+    print(f"  {floor_label:<29} : {res_base['random_floor_mean']:>10,.1f}  "
+          f"(std {res_base['random_floor_std']:,.1f}) - sanity check only, "
+          f"not a result")
 
     # --- V3: smart engine vs V2 greedy on the starting-lineup objective ----
     print("-" * 72)
@@ -156,34 +179,83 @@ def main() -> None:
     print(f"   V3 smart roster ('*' = makes the actual starting lineup):")
     print(res_v3["smart_roster"].to_string(index=False))
     print("   Starting-lineup actual points (the realistic H2H objective):")
+    print(f"     Naive baseline   : {res_v3['naive_lineup']:>10,.1f}  <- BASELINE")
     print(f"     V2 greedy engine : {res_v3['greedy_lineup']:>10,.1f}")
     print(f"     V3 smart engine  : {res_v3['smart_lineup']:>10,.1f}  "
-          f"(margin {res_v3['lineup_margin']:+,.1f})")
+          f"({res_v3['lineup_margin']:+,.1f} vs V2 greedy, "
+          f"{res_v3['margin_vs_naive']:+,.1f} / {res_v3['pct_vs_naive']:+.1f}% vs naive)")
     print(f"     (whole-roster sums for continuity: V2 {res_v3['greedy_total']:,.1f}  "
           f"V3 {res_v3['smart_total']:,.1f})")
 
     # --- V5: multi-season distribution against named benchmarks + charts ---
     print("-" * 72)
     print(f"7. V5 multi-season distribution backtest over {config.MULTI_SEASON_TARGETS} "
-          f"(smart engine vs prior-totals and ADP-proxy drafts) ...")
+          f"(smart engine vs the naive baseline, then ADP proxy) ...")
     ms_totals = scoring.season_totals(scoring.apply_scoring(
         ingest.load_player_logs(config.MULTI_SEASON_SEASONS), scoring_weights))
     ms_bios = ingest.load_player_bios(config.MULTI_SEASON_SEASONS)
     ms = backtest.multi_season_backtest(
         ms_totals, ms_bios, config.MULTI_SEASON_TARGETS, config,
         positions_for=lambda s: _positions_for(ms_totals, s))
-    import pandas as pd  # local: only needed to pretty-print the table
+    import pandas as pd  # local: only needed to pretty-print the tables
     print(pd.DataFrame(ms["per_season"]).to_string(index=False))
     s = ms["summary"]
-    print(f"   Smart engine vs random       : mean {s['vs_random_mean']:+,.1f} "
-          f"({s['pct_vs_random_mean']:+.1f}%, range {s['pct_vs_random_min']:+.1f}%.."
-          f"{s['pct_vs_random_max']:+.1f}%); wins {s['wins_vs_random']}/{s['n_seasons']} seasons")
-    print(f"   Smart engine vs prior-totals : mean {s['vs_prior_mean']:+,.1f} "
-          f"({s['pct_vs_prior_mean']:+.1f}%, std {s['vs_prior_std']:,.1f}); "
-          f"wins {s['wins_vs_prior']}/{s['n_seasons']} seasons")
-    print(f"   Smart engine vs ADP proxy    : mean {s['vs_adp_mean']:+,.1f} "
+    print(f"   Baseline: {s['baseline']}")
+    print(f"   Smart engine vs NAIVE BASELINE : mean {s['vs_prior_mean']:+,.1f} "
+          f"({s['pct_vs_prior_mean']:+.1f}%, range {s['pct_vs_prior_min']:+.1f}%.."
+          f"{s['pct_vs_prior_max']:+.1f}%, std {s['vs_prior_std']:,.1f}); "
+          f"wins {s['wins_vs_prior']}/{s['n_seasons']} seasons   <- the headline")
+    print(f"   Smart engine vs ADP proxy      : mean {s['vs_adp_mean']:+,.1f} "
           f"({s['pct_vs_adp_mean']:+.1f}%, std {s['vs_adp_std']:,.1f}); "
           f"wins {s['wins_vs_adp']}/{s['n_seasons']} seasons")
+    print(f"   Smart engine vs random floor   : mean {s['vs_random_floor_mean']:+,.1f} "
+          f"({s['pct_vs_random_floor_mean']:+.1f}%); "
+          f"wins {s['wins_vs_random_floor']}/{s['n_seasons']} - sanity check only")
+
+    # --- Head-to-head: league held fixed, only MY version changes -----------
+    print("-" * 72)
+    print(f"7b. Head-to-head: all {config.NUM_TEAMS - 1} opponents draft NAIVELY, "
+          f"only my version changes,")
+    print(f"    averaged over all {config.NUM_TEAMS} draft slots (step 7 changes every "
+          f"team's board at")
+    print("     once, which flatters any board; this isolates the edge a version "
+          "buys ME) ...")
+    h2h = backtest.head_to_head_backtest(
+        ms_totals, ms_bios, config.MULTI_SEASON_TARGETS, config,
+        positions_for=lambda s: _positions_for(ms_totals, s))
+    hs = h2h["summary"]
+    h2h_cols = ["season", "naive_baseline"] + [
+        label for label, _b, _s in backtest.DEFAULT_HEAD_TO_HEAD_VARIANTS]
+    print(f"   Slot-averaged lineup points ({hs['n_slots']} slots x "
+          f"{hs['n_seasons']} seasons = {hs['n_slots'] * hs['n_seasons']} drafts "
+          f"per variant):")
+    print(pd.DataFrame(h2h["per_season"])[h2h_cols].to_string(index=False))
+    print(f"   Edge over drafting naively myself "
+          f"(lineups set by {hs['lineup_value_source']}):")
+    for label, stats in hs["variants"].items():
+        print(f"     {label:<24}: mean {stats['mean_margin']:>+9,.1f} "
+              f"({stats['mean_pct']:>+6.1f}%, worst {stats['worst_pct']:>+6.1f}%, "
+              f"best {stats['best_pct']:>+6.1f}%); "
+              f"wins {stats['seasons_won']}/{hs['n_seasons']} seasons; "
+              f"positive in {stats['share_positive']:.0%} of slot-seasons "
+              f"(spread across slots {stats['slot_spread_pct']:.1f}pp)")
+    print("   The slot spread is why every slot is averaged: within one season it is "
+          "as large as")
+    print("   the variation between seasons, so a single-slot verdict is mostly "
+          "reading draft position.")
+    print("   Lineup-scoring bounds - who picks the starters (see README "
+          "'Known limitations'):")
+    print(f"     {'variant':<24}   {'hindsight':>10}   {'projection-picked':>18}")
+    for label, stats in hs["variants"].items():
+        print(f"     {label:<24}   {stats['mean_pct_hindsight']:>+9.1f}%   "
+              f"{stats['mean_pct_projection']:>+17.1f}%")
+    print("     hindsight = best lineup the roster COULD have produced (upper bound);")
+    print("     projection-picked = the lineup you would have set in October (lower "
+          "bound).")
+    print("     Real managers set lineups weekly, so the truth is between them. No "
+          "draft")
+    print("     decision sees target-season data either way - this is a scoring "
+          "assumption.")
 
     print("8. Rendering plotnine charts to outputs/ ...")
     curve = projection.build_aging_curve(totals, bios, config.TARGET_SEASON, config)
@@ -201,24 +273,36 @@ def main() -> None:
     print("=" * 72)
 
     proj_verdict = "BEATS" if target_cmp["v2"]["mae"] < target_cmp["v1"]["mae"] else "DOES NOT BEAT"
-    draft_verdict = "BEATS" if v2_vs_v1 > 0 else "DOES NOT BEAT"
+    draft_verdict = "BEATS" if v2_vs_naive > 0 else "DOES NOT BEAT"
     v3_verdict = "BEATS" if res_v3["lineup_margin"] > 0 else "DOES NOT BEAT"
     v4_aging_verdict = "BEATS" if cmp4["v4_aging_only"]["mae"] < cmp4["v2"]["mae"] else "DOES NOT BEAT"
     v4_shrink_verdict = "BEATS" if cmp4["v4_shrink_only"]["mae"] < cmp4["v2"]["mae"] else "DOES NOT BEAT"
     print(f"V2 verdict: projection {proj_verdict} V1 on MAE; "
-          f"V2 draft {draft_verdict} V1 draft (whole-roster) on {config.TARGET_SEASON}.")
+          f"V2 draft {draft_verdict} the naive baseline (whole-roster) on "
+          f"{config.TARGET_SEASON}.")
     print(f"V3 verdict: smart engine {v3_verdict} V2 greedy on the starting-lineup "
           f"objective ({config.TARGET_SEASON}).")
-    print(f"V4 verdict: aging {v4_aging_verdict} V2 on MAE (kept); "
-          f"shrinkage {v4_shrink_verdict} V2 on MAE (dropped by default).")
+    print(f"V4 verdict (single season {config.TARGET_SEASON}, high variance): "
+          f"aging {v4_aging_verdict} V2 on MAE; shrinkage {v4_shrink_verdict} V2. "
+          f"The config defaults (aging on, shrinkage off) are set on POOLED evidence "
+          f"across seasons, not this one season - see the README's V4 tables.")
     v5_prior = "BEATS" if s["vs_prior_mean"] > 0 else "DOES NOT BEAT"
     v5_adp = "BEATS" if s["vs_adp_mean"] > 0 else "DOES NOT BEAT"
     yahoo_state = "live Yahoo settings" if config.USE_YAHOO else "placeholder settings (Yahoo not configured)"
     print(f"V5 verdict: across {s['n_seasons']} seasons the smart engine {v5_prior} the "
-          f"prior-totals draft and {v5_adp} the ADP proxy on average; ran on {yahoo_state}.")
+          f"naive baseline and {v5_adp} the ADP proxy on average; ran on {yahoo_state}.")
+    best_label, best_stats = max(hs["variants"].items(),
+                                 key=lambda kv: kv[1]["mean_pct"])
+    print(f"Head-to-head verdict: against a league that did NOT change, the best "
+          f"variant is '{best_label}' at {best_stats['mean_pct']:+.1f}% "
+          f"(positive in {best_stats['share_positive']:.0%} of "
+          f"{hs['n_slots'] * hs['n_seasons']} slot-seasons). "
+          f"Variants that lose here are worse than drafting naively.")
     print("Per the spec, keep each component only where it helps - see the numbers "
           "above and the README. The multi-season distribution above is the "
-          "trustworthy read; a single season is high variance.")
+          "trustworthy read; a single season is high variance. Every margin is "
+          "measured against the naive prior-season-totals draft; the random floor "
+          "is a wiring check, not evidence.")
 
 
 if __name__ == "__main__":

@@ -10,6 +10,11 @@ documents that it simulates the full draft (every team drafts) rather than
 replaying a real historical draft, because no true historical replay exists.
 Marginal value, positional-run risk, and an optional Monte Carlo opponent model
 are V3.
+
+:func:`snake_draft_vs_fixed_opponents` is the odd one out: it lets ME draft off one
+board while every opponent drafts off another, so a version can be measured against
+a league that did NOT also change. Comparing two same-board runs compares leagues,
+not strategies - see that function's docstring.
 """
 
 from __future__ import annotations
@@ -257,3 +262,89 @@ def snake_draft_smart(
         rosters[my_slot].append(best_id)
 
     return rosters
+
+
+def snake_draft_vs_fixed_opponents(
+    my_board: pd.DataFrame,
+    opponent_board: pd.DataFrame,
+    n_teams: int,
+    roster_size: int,
+    my_slot: int,
+    position_map: dict[int, str],
+    league,
+    strategy: str = "smart",
+    run_risk_weight: float | None = None,
+) -> list[int]:
+    """Draft MY roster while every opponent drafts greedily off a DIFFERENT board.
+
+    :func:`snake_draft` and :func:`snake_draft_smart` hand every team the same
+    board, so comparing two of their runs compares two *leagues* - everybody's
+    board changed at once. That answers "what if the whole league upgraded?", which
+    is not the question a draft assistant exists to answer.
+
+    This holds the league fixed: all ``n_teams - 1`` opponents draft best-available
+    off ``opponent_board`` (pass the naive prior-season-totals board for "a room of
+    ordinary drafters"), while I draft off ``my_board`` with my own strategy. The
+    margin over drafting naively myself into that same room is the edge a version
+    actually buys me.
+
+    The two boards need not contain the same players: picks are tracked in one
+    shared set, so nobody is drafted twice and each side simply skips players it
+    has never heard of.
+
+    Args:
+        my_board: my ranked board (row order = my preference, best first).
+        opponent_board: the board every opponent drafts greedily off.
+        n_teams, roster_size, my_slot: league shape and my draft position.
+        position_map: player id -> coarse position, for the lineup objective.
+        league: the :mod:`src.config` module (roster slots, mappings, weight).
+        strategy: ``"smart"`` (the V3 engine) or ``"greedy"`` (best available off
+            ``my_board``).
+        run_risk_weight: overrides ``league.RUN_RISK_WEIGHT`` when given.
+
+    Returns:
+        My roster as a list of player ids, in the order I picked them.
+
+    Note:
+        Opponents are still non-reactive - they never respond to what I take. This
+        is a better opponent model than "everyone runs my strategy", not a good one;
+        the binding constraint from V3 still applies.
+    """
+    if my_slot < 1 or my_slot > n_teams:
+        raise ValueError(f"my_slot {my_slot} must be within 1..{n_teams}.")
+    if strategy not in {"smart", "greedy"}:
+        raise ValueError(f"Unknown strategy {strategy!r}; expected 'smart' or 'greedy'.")
+
+    order = snake_pick_order(n_teams, roster_size)
+    gaps = _gaps_to_next_my_pick(order, my_slot)
+
+    opponent_pref: list[int] = opponent_board[C.COL_PLAYER_ID].tolist()
+    my_pref: list[int] = my_board[C.COL_PLAYER_ID].tolist()
+    value_by_id = dict(zip(my_board[C.COL_PLAYER_ID], my_board[C.COL_PROJECTED_PTS]))
+    position_by_id = {pid: position_map.get(pid, pos_mod.UNKNOWN_POSITION)
+                      for pid in set(my_pref) | set(opponent_pref)}
+
+    taken: set[int] = set()
+    my_roster: list[int] = []
+
+    for idx, team_slot in enumerate(order):
+        if team_slot != my_slot:
+            for pid in opponent_pref:            # greedy opponent off the fixed board
+                if pid not in taken:
+                    taken.add(pid)
+                    break
+            continue
+
+        available = [pid for pid in my_pref if pid not in taken]
+        if not available:
+            continue
+        if strategy == "greedy":
+            pick = available[0]
+        else:
+            ranked = rank_candidates(available, my_roster, value_by_id, position_by_id,
+                                     league, gaps.get(idx, 0), run_risk_weight)
+            pick = ranked[0][0]
+        taken.add(pick)
+        my_roster.append(pick)
+
+    return my_roster

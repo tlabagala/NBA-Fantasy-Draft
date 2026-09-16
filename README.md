@@ -37,14 +37,16 @@ constrained decision engine, a simulation, and a leakage-free backtest. It is
    the board (no value-over-replacement yet).
 5. **Draft** - simulates a full snake draft where every team drafts greedily (best
    available). Returns each team's roster.
-6. **Backtest** - scores the greedy roster on the **actual** target-season totals
-   and compares it against random drafts, reporting the margin.
+6. **Backtest** - scores the greedy roster on the **actual** target-season totals.
+   This roster *is* the naive baseline every later version is measured against
+   (see [Benchmarking](#benchmarking)); a random draft is scored beneath it only
+   as a sanity floor.
 
 ## Method, in one line
 
 Projection = prior-season fantasy-point total. Board = sort by projection. Draft =
-greedy snake. Backtest = greedy roster's actual points minus the mean of many
-seeded random rosters, on a held-out (later) season.
+greedy snake. Backtest = each engine's actual points minus the **naive
+prior-season-totals draft's** actual points, on a held-out (later) season.
 
 ## Time-ordering and no leakage
 
@@ -57,16 +59,95 @@ across time.
 
 ## Benchmarking
 
-No model output is reported in isolation. The greedy draft is benchmarked against
-a random draft. A single random draft is high variance, so the baseline is the
-**mean over many seeded random drafts** (`RANDOM_BASELINE_TRIALS` in config), and
-the result is reported as a **margin** plus the share of trials the greedy roster
-beats.
+No model output is reported in isolation, and **the baseline is a naive model, not
+a random draft.**
+
+**The baseline: the naive prior-season-totals draft.** A greedy snake draft off the
+V1 board - "take whoever scored most last season". It is the model a competent but
+unsophisticated human approximates with a printed cheat sheet, so it is the bar
+worth clearing, and every engine's headline margin is measured against it
+([`naive_baseline_roster`](src/backtest.py)). It is held to the same leakage guard
+as everything else, so the comparison is fair.
+
+**The random draft is a sanity floor, not a baseline.** It is still computed - the
+mean over `RANDOM_BASELINE_TRIALS` seeded drafts - but it shows only that the board
+and pick order are wired up. Nobody drafts randomly, so beating it is evidence of
+nothing. It is reported last and labelled a floor everywhere it appears.
+
+One consequence worth stating plainly: **V1 *is* the naive baseline** (its
+projection is the prior-season total), so there is no "V1 versus baseline" margin
+to report - it is the reference, and the meaningful margins start at V2.
+
+> **Deviation from the spec, recorded.** The masterdoc (Section 3, rule 2) names
+> *random* as V1's naive draft and prior-season-totals only "later". Random was
+> kept as V1's baseline long enough to show it is uninformative - a +153% margin
+> that means nothing - so the reference was moved down to the naive model the same
+> rule names for later versions. The spec's actual requirement, "always benchmark
+> against a naive baseline", is better served this way.
 
 The backtest simulates the **full draft** - every team drafts under the same
 strategy - rather than replaying a real historical draft, because no faithful
 replay of a past draft exists. This choice is documented in
 [`src/backtest.py`](src/backtest.py).
+
+## Evaluating a projection: why MAE is not enough
+
+Every projection result in this README used to be a single MAE number. That is a
+weak test for this problem, for two reasons:
+
+1. **A draft board is a ranking.** Nothing consumes the projected point value - the
+   draft consumes the *order*. A projection that doubles every player's total and
+   adds 500 has a catastrophic MAE and produces an **identical board**. (There is a
+   test asserting exactly that: `test_rank_metrics_ignore_a_monotone_rescaling`.)
+2. **Only the top of the board matters.** In a 12-team, 13-round league exactly 156
+   players are drafted. Being wrong about the 400th-ranked player costs nothing, yet
+   MAE weights him the same as the first pick.
+
+[`projection_accuracy`](src/backtest.py) now reports three families:
+
+| Family | Metrics | What it catches that MAE misses |
+|---|---|---|
+| Error size | `mae`, `rmse`, `medae`, `p90_ae`, `bias` | `medae` is robust to injury blow-ups; `p90_ae` is the tail itself; **`bias` is signed**, so systematic over-prediction is visible |
+| Association | `pearson`, `r2`, `spearman` | `spearman` is rank correlation - the closest single number to "is this a good board" |
+| Top-of-board | `precision_at_k`, `ndcg_at_k`, `spearman_at_k`, `precision_at_round1` | judges only the players actually drafted; `ndcg` weights the early picks most |
+
+### Result: the metrics disagree, and no variant dominates
+
+Pooled over the 13 target seasons (k = 156, round 1 = 12):
+
+| Variant | MAE | RMSE | MedAE | bias | Spearman | R² | P@156 | NDCG | Spear@156 | P@rd1 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| V1 prior total | 508.9 | 688.9 | **384.3** | +34.9 | **0.731** | 0.515 | **0.735** | 0.884 | **0.576** | 0.532 |
+| V2 PPG x GP | 521.1 | 683.4 | 410.8 | +13.3 | 0.712 | 0.526 | 0.714 | 0.878 | 0.548 | 0.558 |
+| **V4 aging** | **501.8** | 659.3 | 401.2 | **+9.1** | **0.731** | 0.559 | 0.731 | **0.888** | 0.558 | **0.577** |
+| V4 shrinkage | 522.1 | 674.0 | 423.8 | +29.4 | 0.711 | 0.540 | 0.713 | 0.877 | 0.539 | 0.545 |
+| V4 aging+shrink | 504.9 | **652.2** | 408.6 | +28.5 | 0.730 | **0.570** | 0.726 | 0.886 | 0.565 | **0.577** |
+
+**V4's aging curve wins the error magnitude, the tail, the bias and the
+rank-weighted top of the board** (NDCG, first-round precision). **V1 wins the median
+error and the ordering within the drafted pool** (`precision_at_k`,
+`spearman_at_k`); Spearman overall is a dead tie at 0.731.
+
+Read together that is a coherent story rather than a contradiction: aging mainly
+fixes the *large* misses - ageing players whose prior-season total badly overstates
+them - which is why it wins MAE, RMSE, p90 and bias while slightly losing the
+median. Shrinkage loses on every family, confirming the decision to leave it off.
+
+### Two things only the new metrics could show
+
+**V1 is systematically optimistic.** Its bias is **+34.9 points per player**, against
++9.1 for V4 aging. Prior-season totals over-predict, because the players who
+finished highest last season are disproportionately those who were both good *and*
+lucky with health, and because nobody in the pool is getting younger. MAE cannot
+reveal a systematic direction; `bias` does, and it is a genuine point in V4's
+favour that eight versions of this README never recorded.
+
+**The board is far weaker at the top than it looks.** Overall Spearman is a
+respectable ~0.73, but **`spearman_at_k` is only ~0.55-0.58** - ordering the players
+you actually draft is much harder than separating good players from bad ones. And
+**`precision_at_round1` is ~0.53-0.58**: barely more than half of your projected
+first-rounders actually finish in the real top twelve. That number belongs in the
+honest-framing conversation more than any MAE does.
 
 ## V2 - realistic projection and a value-over-replacement board
 
@@ -96,10 +177,10 @@ keeping only what does:
 On this data, **V1's prior-season total is a hard-to-beat baseline and V2's
 projection does not improve it**:
 
-| Projection | Pooled MAE (3-season window, targets 2021-22/22-23/23-24) |
+| Projection | Pooled MAE (13 targets, 2013-14 .. 2025-26) |
 |---|---|
-| V1 - prior-season total | **466.7** |
-| V2 - recency PPG x GP | 480.4 |
+| V1 - prior-season total | **508.9** |
+| V2 - recency PPG x GP | 521.1 |
 
 V2 wins individual seasons occasionally (e.g. 2021-22) but loses on balance. This
 matches a well-known result: last season alone is a strong naive predictor, and
@@ -144,17 +225,24 @@ model** (the binding constraint the spec flags).
 
 ### V3 result
 
-The smart engine beats the V2 greedy roster on the starting-lineup objective, and
-- unlike the V2 projection - the win is **robust across every season tested**:
+**This result was revised when history was extended from 3 target seasons to 13.**
+It originally read "robust across every season tested" (3/3). Across 2013-14 to
+2025-26 the same-board comparison is much weaker:
 
-| Target season | V2 greedy lineup | V3 smart lineup | Margin |
-|---|---|---|---|
-| 2021-22 | 24,365 | 26,128 | **+1,763** |
-| 2022-23 | 22,277 | 25,055 | **+2,778** |
-| 2023-24 | 27,780 | 30,567 | **+2,787** |
+| Comparison (same board for all 12 teams) | Result over 13 targets |
+|---|---|
+| V3 smart beats V2 greedy | 7/13 seasons, mean **+846** lineup points |
+| V3 smart beats the naive baseline | 8/13 seasons, mean **-0.2%** |
 
-The win is structural: greedy ignores lineup construction and wastes picks on depth
-it cannot start, while the engine balances the roster. **Decision: V3 is kept.**
+So on the measurement the V3 gate was originally written against, the engine is
+close to a coin flip. That is not a reason to drop it - it is a reason to distrust
+the measurement. When the same engine is measured against a league that did *not*
+also change boards, it is decisively better ([head-to-head](#head-to-head-holding-the-league-fixed):
+**+7.8%, 12/13 seasons, p = 0.0004**).
+
+The mechanism is unchanged and still the right idea: greedy ignores lineup
+construction and wastes picks on depth it cannot start, while the engine balances
+the roster. **Decision: V3 is kept** - on the head-to-head evidence, not this table.
 
 **Monte Carlo opponent model: deferred (not built).** The spec makes it optional -
 build it only if the cheap heuristic is shown to leave value on the table, and it
@@ -191,23 +279,37 @@ needs careful injury-versus-decline handling and is left as future work.
 
 ### V4 result
 
-MAE versus the V2 baseline (the spec's reference), scored on a common player set:
+MAE on a common player set, across all 13 target seasons (2013-14 .. 2025-26). MAE
+is only one of three metric families - see
+[Evaluating a projection](#evaluating-a-projection-why-mae-is-not-enough) for the
+ranking and bias picture, which is more favourable to aging than MAE alone
+suggests:
 
-| Variant | 2023-24 MAE | 2022-23 MAE |
+| Variant | Pooled MAE | Seasons won (lowest MAE) |
 |---|---|---|
-| V2 - PPG x GP | 470.3 | 501.3 |
-| **V4 aging only** | **465.1** | **491.1** |
-| V4 shrinkage only | 488.0 | 516.5 |
-| V4 aging + shrinkage | 486.4 | 509.4 |
+| **V4 aging only** | **501.8** | 2/13 |
+| V4 aging + shrinkage | 504.9 | 6/13 |
+| V1 - prior-season total | 508.9 | 5/13 |
+| V2 - PPG x GP | 521.1 | 0/13 |
+| V4 shrinkage only | 522.1 | 0/13 |
 
-**Aging improves on V2 on both metrics in every season tested; shrinkage does
-not** (regressing toward a coarse positional mean drags genuinely-high players
-down). **Decision: keep aging, drop shrinkage** (`V4_USE_SHRINKAGE = False` in
-config; flip it on to re-measure). Honest caveat: even the aging-improved
-projection still does **not** beat the dead-simple V1 prior-season total on MAE -
-across V2, V3 and V4, no "sophisticated" projection has beaten that baseline on
-this data, exactly as the spec warns. V1 remains the projection of record; aging
-is a genuine improvement *within* the V2 family.
+**Aging beats V2 in every season, and now beats V1 pooled** (501.8 vs 508.9), with
+some V4 variant winning 8 of 13 seasons outright. Shrinkage alone remains the worst
+variant and never wins a season. **Decision: keep aging, drop shrinkage**
+(`V4_USE_SHRINKAGE = False` in config; flip it on to re-measure).
+
+**Updated finding: the V1 baseline is no longer undefeated on accuracy.** This
+README previously recorded "no sophisticated projection has beaten V1 on MAE",
+which was true of the three seasons it was then measured on. Over 13 seasons V4's
+aging curve beats it. V1 remains the *baseline* by definition; it is no longer the
+most accurate projection.
+
+Note the interaction with history depth: the aging curve reads *all* seasons before
+the target, so extending history to 2010-11 gave later targets a curve fitted on up
+to 15 seasons instead of 4. The sparse 35-38 age buckets that produce the
+documented survivorship "tick up" are far better populated as a result (47-118
+consecutive-season pairs per age on deep history, against 7-19 on a 5-season
+window).
 
 ## V5 - Yahoo integration, multi-season distribution, and presentation
 
@@ -242,31 +344,123 @@ the code never mis-joins on a guess and never silently drops a player.
 ### Multi-season distribution backtest
 
 A single season is high variance, so the trustworthy verdict runs the engine across
-several target seasons and reports a **distribution against named benchmarks**, all
-scored on the starting-lineup objective with actual points:
-
-| Season | Smart engine | Prior totals | ADP proxy | Random |
-|---|---|---|---|---|
-| 2021-22 | 26,128.5 | 23,608.5 | 19,055.8 | 11,341.2 |
-| 2022-23 | 25,054.8 | 25,653.8 | 26,199.8 | 9,726.9 |
-| 2023-24 | 30,567.0 | 29,991.8 | 30,350.5 | 9,637.3 |
+**13 target seasons** (2013-14 .. 2025-26) and reports a distribution against named
+benchmarks, all scored on the starting-lineup objective with actual points.
 
 | Benchmark | Mean margin | Mean % | Seasons won |
 |---|---|---|---|
-| Random draft | +17,014.9 | **+168.4%** | 3/3 |
-| Prior-season totals | +832.1 | **+3.4%** | 2/3 |
-| ADP proxy | +2,048.1 | **+11.1%** | 2/3 |
+| **Naive baseline (prior-season totals)** | **-74.2** | **-0.2%** | **8/13** |
+| ADP proxy | +477.9 | +2.1% | 7/13 |
+| Random draft (floor, not a result) | +15,085.9 | +153.0% | 13/13 |
 
-**Read this honestly.** Beating a random draft by 168% is a low bar. Against a
-competent opponent who simply drafts by last season's totals the edge is about
-**3%**, and it *loses* one season in three (2022-23: -2.3% vs prior totals, -4.4%
-vs ADP). That spread is the whole reason the spec demanded a distribution rather
-than a single number.
+**Read this honestly - and note what changed.** On three target seasons this table
+showed the engine beating the naive baseline by +4.8%. On thirteen it shows
+**-0.2% (p = 0.96, 95% CI [-7.8%, +7.5%])**: no effect whatsoever. Per-season
+results swing from -20.3% to +19.9%. The apparent edge was noise, and three seasons
+was nowhere near enough to see that.
+
+**This does not mean the engine is worthless - it means this experiment cannot
+measure it.** Every team here drafts off the same board, so changing the board
+changes the whole league at once and my slot's advantage largely cancels. The
+[head-to-head](#head-to-head-holding-the-league-fixed) below, which holds the
+opposing league fixed, finds a large and highly significant edge on exactly the
+same 13 seasons. Where the two disagree, the head-to-head is the one measuring what
+a draft assistant is for.
+
+The random floor is in the table only to show the floor is where you would expect;
++153% is not a result, which is exactly why random is no longer the baseline.
 
 The ADP benchmark uses a **proxy** by default - the aging-adjusted V4 ranking, a
 reasonable stand-in for market consensus - because real ADP needs a live source.
 Pass `adp_board_for` to `multi_season_backtest` (or authorise Yahoo and use
 `get_draft_results`) to benchmark against genuine draft positions.
+
+### Head-to-head: holding the league fixed
+
+Every backtest above hands the *same* board to all twelve teams, so two runs differ
+by an entire league's worth of information. If everybody drafts off the aging
+board, the draft as a whole improves and my slot inherits some of that - whether or
+not I did anything smarter than my opponents. That measures "what if the whole
+league upgraded?", which is not the question a draft assistant exists to answer,
+and on 13 seasons it turns out to measure essentially nothing at all.
+
+[`head_to_head_backtest`](src/backtest.py) asks the narrower question instead: my
+eleven opponents all draft naively (best available by last season's totals), and
+only **my** board and strategy change. The margin over drafting naively myself,
+into that same room, is the edge a version actually buys me
+([`snake_draft_vs_fixed_opponents`](src/draft.py) is the primitive).
+
+**Every draft slot is averaged, not just slot 1.** Within a single season the spread
+across the twelve slots is ~12 percentage points - as large as the variation between
+seasons - so a single-slot verdict is mostly reading draft position. Averaging gives
+**12 slots x 13 seasons = 156 drafts per variant**.
+
+| My version | Mean margin | Mean % | 95% CI | p | Seasons won | Slot-seasons positive |
+|---|---|---|---|---|---|---|
+| V2 VOR board, greedy | -3,051.0 | **-11.8%** | [-21.9, -1.7] | 0.026 | 2/13 | 28% |
+| V4 aging board, greedy | -627.6 | **-1.4%** | [-11.2, +8.3] | 0.755 | 6/13 | 48% |
+| V3 engine on V2 board | +1,626.8 | **+7.8%** | [+4.3, +11.3] | 0.0004 | 12/13 | 72% |
+| **V4 board + V3 engine** | **+3,182.0** | **+14.6%** | **[+9.0, +20.3]** | **0.0001** | **13/13** | **85%** |
+
+**The shipped stack wins every season tested**, with a worst case of +1.0% and a
+mean of +14.6% - and unlike everything else in this README, it is statistically
+unambiguous (p = 0.0001).
+
+**The engine is what buys the edge; boards drafted greedily do not.** Greedy off
+the VOR board is significantly *worse* than naive (-11.8%, p = 0.026). The
+mechanism is visible in the replacement levels: on 2023-24 they are G 1,808 /
+F 1,552 / **C 826**, so value over replacement massively inflates centres.
+Greedy-off-VOR opens Jokic, Embiid, Vucevic - taking Embiid (2,830 actual) and
+Vucevic (3,239) while Doncic (5,138) and Gilgeous-Alexander (4,613) sit on the
+board. The VOR top 13 averages 3,591 actual points against the naive top 13's
+3,976. You reach for scarcity against a market that is not pricing it, and pay in
+absolute points. Greedy off the *aging* board is merely neutral (-1.4%, p = 0.76).
+
+The V3 engine fixes exactly this: it values a candidate by what he adds to *my*
+starting lineup and uses run-risk to time positional scarcity, rather than treating
+the board as a draft order. **So a better board is useful *inside* the engine, not
+*as* a ranking** - which is how [V6](#v6---live-draft-assistant-srclive_draftpy)
+and [V7](#v7---draft-day-web-ui-srcapp_uipy-draft_apppy) already use it. And the
+better projection genuinely compounds: V4's board nearly doubles the engine's edge
+(+14.6% vs +7.8%).
+
+Caveat: opponents are non-reactive - they never adjust to what I take. This is a
+better opponent model than "everyone runs my strategy", not a good one, and it is
+the remaining reason to treat +14.6% as an upper bound rather than a forecast.
+
+### What sets the starting lineup (and why it barely matters)
+
+Scoring a roster means picking its best legal starting lineup and summing those
+players' **actual** points - but "best" needs something to sort by, and that choice
+is an assumption, not a detail. Both options are now computed and reported
+(`lineup_value_source` on `backtest_v3`, `multi_season_backtest` and
+`head_to_head_backtest`; see [`score_lineup` / `lineup_bounds`](src/backtest.py)):
+
+- **`"hindsight"`** (default) - starters picked using the actual season totals. The
+  best lineup the roster *could* have produced: an **upper bound**. This is what
+  every backtest in this project did before the parameter existed.
+- **`"projection"`** - starters picked from the board the roster was drafted off,
+  then scored on actual points. The lineup you would have set in October and never
+  touched: a **lower bound**.
+
+| Head-to-head edge over naive | Hindsight | Projection-picked |
+|---|---|---|
+| V2 VOR board, greedy | -11.8% | -14.4% |
+| V4 aging board, greedy | -1.4% | -2.0% |
+| V3 engine on V2 board | +7.8% | +6.7% |
+| **V4 board + V3 engine** | **+14.6%** | **+15.0%** |
+
+**The headline is robust to the assumption.** Hindsight inflates every roster's
+absolute points, but it inflates the naive baseline at least as much as the engine,
+so the *margin* is near-identical - and for the shipped stack the pessimistic bound
+is fractionally **higher**. Real managers set lineups weekly using in-season
+information that is legitimately available (unlike at the draft), so the truth sits
+between these two, and it makes almost no difference which end you take.
+
+To be explicit about what this is and is not: **no draft decision anywhere sees
+target-season data** - the leakage guards in [`src/projection.py`](src/projection.py)
+enforce that against the target season *and every season after it*. This is purely a
+question of how generously the resulting roster is scored.
 
 ### Charts ([`src/viz.py`](src/viz.py))
 
@@ -507,12 +701,19 @@ python src/main.py
 ```
 
 Runs every version end to end and prints: the V1/V2/V4 projection accuracy (with the
-aging and shrinkage variants); the actual-season totals for the random baseline, V1
-greedy and V2 greedy; the V3 smart roster with its starting-lineup margin; the V5
-multi-season distribution against all three benchmarks; and the paths of the three
-rendered charts.
+aging and shrinkage variants); the actual-season totals for the **naive baseline**
+and V2 greedy with the margin between them (and the random floor beneath, marked as
+a sanity check); the V3 smart roster with its starting-lineup margin over both the
+V2 greedy engine and the naive baseline; the V5 multi-season distribution, headed by
+the margin over the naive baseline; the head-to-head table (opponents held naive,
+only my version changing); and the paths of the rendered charts.
 
 First run pulls from `nba_api` and caches to `data/`; later runs read the cache.
+With history from 2010-11 that first pull is substantial - 16 seasons of logs and
+bios (one call each) plus **30 `CommonTeamRoster` calls per season** for positions,
+so budget roughly 10 minutes once. The populated cache is about 36 MB. A full run
+on the warm cache takes a few minutes, most of it the 156 drafts per variant in the
+head-to-head.
 
 ## Test
 
@@ -522,8 +723,9 @@ First run pulls from `nba_api` and caches to `data/`; later runs read the cache.
 
 - `test_leakage.py` - the V1 projection for season N uses no season-N data, and
   the guard trips under a forced regression.
-- `test_baseline.py` - the greedy draft beats a random draft on the backtest
-  season.
+- `test_baseline.py` - the naive baseline is exactly the prior-season-totals
+  draft (not something that drifted), V2 and V3 report their margins against it,
+  and it clears the random sanity floor.
 - `test_projection_v2.py` - V2 leakage guard, PPG x GP mechanics, and V2 beating
   V1 on the injury-rebound case it is designed for.
 - `test_vor.py` - scarcer positions out-rank equal projections; unknown-position
@@ -538,7 +740,21 @@ First run pulls from `nba_api` and caches to `data/`; later runs read the cache.
   crosswalk surfaces unmatched players and refuses to mis-join ambiguous names.
 - `test_yahoo.py` - Yahoo position and stat mappings (pure helpers, no network).
 - `test_multi_season.py` - the multi-season backtest returns a distribution against
-  every named benchmark.
+  every named benchmark, with the naive baseline leading the reported columns and
+  the random floor last.
+- `test_head_to_head.py` - the fixed-opponent draft reduces exactly to the ordinary
+  greedy snake draft when both sides share a board (the correctness anchor), stays
+  legal when the two boards disagree on the player pool, and the head-to-head
+  backtest reports a margin per variant that is consistent with its own totals.
+- `test_lineup_bounds.py` - the hindsight bound reproduces the pre-parameter
+  behaviour exactly, hindsight can never score below projection-picked (they really
+  are bounds), a perfect projection collapses them onto each other, and the bounds
+  carried in one head-to-head run match a dedicated run with that source selected.
+- `test_projection_metrics.py` - the ranking metrics are invariant to a monotone
+  rescaling that wrecks MAE (the reason they exist), bias is signed where MAE is
+  not, median and p90 separate typical error from injury blow-ups, top-of-board
+  metrics ignore the undraftable tail, and degenerate input returns `nan` rather
+  than raising.
 - `test_live_draft.py` - draft-position selection drives the pick clock; recording
   real picks (for any team) shrinks the board and advances the clock; undo and
   out-of-turn corrections; recommendations track the true remaining board and never
@@ -569,9 +785,21 @@ than adding Streamlit-specific tests that would need their own maintenance.
 - **The aging curve has survivorship bias** (V4): players who age out and leave the
   league are not in the consecutive-season pairs, so late-career decline is
   understated and the curve even ticks up at 36-38. Flagged in code and above.
-- **No "sophisticated" projection has beaten the V1 prior-season total on MAE**
-  (V2, V3, V4 all tested). V1 remains the projection of record; V4's aging is an
-  improvement only relative to V2.
+- **V4's aging projection beats V1 on pooled MAE** (501.8 vs 508.9 over 13
+  targets). The "V1 is undefeated" finding this README used to record was true only
+  of the three seasons it was measured on. V2 and shrinkage still lose.
+- **A better projection helps the draft only through the engine.** The V4 aging
+  board nearly doubles the engine's edge (+14.6% vs +7.8%), but drafted greedily it
+  is worth nothing at all (-1.4%, p = 0.76).
+- **Same-board results did not survive more data.** Two findings this project once
+  reported as solid on three seasons - the engine beating the naive baseline by
+  +4.8%, and V3 beating V2 greedy in every season - collapse to -0.2% and 7/13 over
+  thirteen. Anything measured with all twelve teams on one board should be treated
+  as provisional.
+- **Board quality and draft order are not the same thing.** Drafting greedily off
+  the value-over-replacement board is *worse than naive* (-30%) against a league
+  that prices players by last season's totals. VOR belongs inside the engine, not
+  as a ranking - see the head-to-head section.
 - **The draft engine is only as valid as its opponent model.** V3 opponents draft
   greedily (a simple bot); the engine's edge would shrink against smarter
   opponents. A full Monte Carlo opponent model is deferred (see the V3 section).
@@ -585,8 +813,21 @@ than adding Streamlit-specific tests that would need their own maintenance.
   Field names in `yahoo.py` should be verified on the first authorised run.
 - **The ADP benchmark is a proxy** (aging-adjusted ranking), not real draft-position
   data, until a live ADP source is supplied.
-- **Only three seasons** feed the multi-season distribution by default. More
-  history would tighten every estimate, especially the aging curve.
+- **Thirteen target seasons** (2013-14 .. 2025-26) feed the distributions, on
+  history from 2010-11. That is enough to make the head-to-head unambiguous
+  (p = 0.0001) but it is what *overturned* two earlier three-season findings, so
+  treat any result here as provisional until it has been re-run on more data.
+  `nba_api` supports back to 1996-97 if more is wanted; the cost is 30
+  `CommonTeamRoster` calls per additional season.
+- **2019-20 and 2020-21 are COVID-shortened** and are both target seasons, which
+  adds avoidable noise to the games-played model and the distributions.
+- **Scoring assumes a perfect season-long lineup by default.** Starters are picked
+  knowing the actual outcome (`lineup_value_source="hindsight"`), which is an upper
+  bound on what a roster is worth. The lower bound (`"projection"`) is reported
+  alongside it and the two differ by well under a percentage point on the headline,
+  so the conclusions do not depend on it - but the absolute point totals are
+  optimistic. Both bounds also fix one starting lineup for the whole season, while
+  real H2H sets lineups weekly; neither models that.
 
 ## Repository layout (V1 - V7)
 
@@ -601,8 +842,13 @@ src/
   positions.py   V2: coarse G/F/C positions from rosters
   board.py       V1 ranking; V2 value-over-replacement
   lineup.py      V3: best legal starting-lineup value (the H2H objective)
-  draft.py       greedy / random snake draft; V3 smart engine
-  backtest.py    V1 greedy-vs-random; V2/V4 accuracy; V3 smart-vs-greedy; V5 multi-season
+  draft.py       greedy / random snake draft; V3 smart engine;
+                 snake_draft_vs_fixed_opponents (league held fixed, only I change)
+  backtest.py    naive baseline (the reference) + random floor;
+                 projection_accuracy (error / association / ranking metrics);
+                 V3 smart-vs-greedy-vs-naive; V5 multi-season distribution;
+                 head_to_head_backtest (the honest per-version verdict);
+                 score_lineup / lineup_bounds (who is allowed to set the lineup)
   yahoo.py       V5: live yfpy league settings, eligibility, draft results
   reconcile.py   V5: nba_api <-> Yahoo player join, unmatched surfaced
   viz.py         V5: plotnine charts -> outputs/
@@ -610,7 +856,7 @@ src/
                  V7 split out build_board_bundle() (slot-independent, cacheable)
   app_ui.py      V7: Streamlit UI logic - all of it lives here, not in draft_app.py
   main.py        CLI entry point (runs V1-V5, reports every comparison)
-tests/           13 test modules, 43 tests (see the Test section; unchanged by V7)
+tests/           16 test modules, 72 tests (see the Test section)
 project_overview.ipynb   high-level walkthrough with charts
 .env.example     Yahoo credential template (copy to git-ignored .env)
 data/            Parquet cache (git-ignored, disposable)
@@ -621,11 +867,17 @@ outputs/         rendered charts + live_draft_state.json (git-ignored, re-render
 
 | Question | Answer |
 |---|---|
-| Does the draft beat random? | Yes - **+168%** starting-lineup points on average, 3/3 seasons |
-| Does it beat a competent baseline (prior-season totals)? | Marginally - **+3.4%**, 2/3 seasons |
-| Did a more sophisticated projection help? | **No** - V1's prior-season total was never beaten on MAE |
-| Did a smarter draft engine help? | **Yes** - V3 beat greedy on the lineup objective in every season |
+| Does it beat the naive baseline, league held fixed? | **Yes, +14.6%**, 13/13 seasons, 85% of slot-seasons, p = 0.0001 - the number to trust |
+| Does it beat naive when the whole league upgrades too? | **No - -0.2%**, p = 0.96. That experiment measures nothing |
+| Does it clear the random floor? | Yes - +153%, 13/13 seasons, but that is a wiring check, not a result |
+| Did a more sophisticated projection help *accuracy*? | **Yes** - V4 aging beats V1 pooled (501.8 vs 508.9 over 13 targets) |
+| Did that better projection help the *draft*? | **Yes, but only via the engine** - +14.6% with it, +7.8% on the V2 board |
+| Did a smarter draft engine help? | **Yes** - the only component that beats naive at all |
+| Is the VOR board a draft order? | **No** - greedy off VOR is **-30%**, worse than naive |
 | Did the aging curve help? | **Yes** vs V2 (kept). Shrinkage did **not** (dropped) |
 
 The pattern worth taking away: **the decision engine paid off, the fancier
-projections did not.** Roster construction beat forecasting on this problem.
+projections did not.** Roster construction beat forecasting on this problem - and
+the head-to-head sharpens it further: the projection and scarcity work only pays
+off when the *engine* consumes it. Used directly as a draft order, it loses badly to
+"take whoever scored most last season".
