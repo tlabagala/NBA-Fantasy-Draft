@@ -183,13 +183,20 @@ V4_USE_SHRINKAGE: bool = False
 
 
 # --------------------------------------------------------------------------
-# Determinism and the random baseline.
+# Determinism, the naive baseline, and the random floor.
 # --------------------------------------------------------------------------
-# The draft is benchmarked against random drafts. A single random draft is high
-# variance, so we average the same-slot roster over RANDOM_BASELINE_TRIALS seeded
-# random drafts and report the mean as the baseline. All randomness is seeded.
+# THE BASELINE IS THE NAIVE MODEL: a greedy snake draft off the prior-season-totals
+# board ("take whoever scored most last season"). It needs no config of its own -
+# it is derived from SEASONS/TARGET_SEASON and the league shape above, and lives in
+# src/backtest.py::naive_baseline_roster. Every engine's headline margin is measured
+# against it, because that is the bar a competent human sets.
+#
+# The RANDOM draft is kept only as a sanity floor: it shows the board and pick order
+# are wired up, not that the engine is any good (nobody drafts randomly). A single
+# random draft is high variance, so the floor averages RANDOM_BASELINE_TRIALS seeded
+# trials. All randomness is seeded.
 SEED: int = 42
-RANDOM_BASELINE_TRIALS: int = 200
+RANDOM_BASELINE_TRIALS: int = 200   # trials for the random FLOOR, not the baseline
 
 
 # --------------------------------------------------------------------------
@@ -216,10 +223,26 @@ USE_YAHOO: bool = bool(YAHOO_LEAGUE_ID and YAHOO_CONSUMER_KEY and YAHOO_CONSUMER
 # --------------------------------------------------------------------------
 # V5 multi-season distribution backtest. A single season is high variance, so the
 # trustworthy verdict runs across several target seasons and reports a distribution.
-# These default to seasons cached during the build; extend for a longer history.
+#
+# History runs from 2010-11. A target needs N_PROJECTION_SEASONS (3) prior seasons,
+# so the first usable target is 2013-14, giving 13 target seasons. Why 2010-11 and
+# not earlier: the aging curve is the only component that reads deep history, and
+# its estimates converge with diminishing returns - measured against a 29-season
+# curve, mean absolute deviation over ages 22-33 falls 0.0181 (3 seasons) -> 0.0088
+# (10) -> 0.0067 (15) -> 0.0020 (25). Fifteen seasons captures most of the
+# available gain while keeping the era reasonably comparable; nba_api can go back
+# to 1996-97 (earlier seasons lack the SEASON_YEAR column, and the three-point line
+# only exists from 1979-80) if a longer curve is ever wanted.
+#
+# Cost of extending further: logs and bios are one call per season, but positions
+# need 30 CommonTeamRoster calls per season, which is the real expense.
 # --------------------------------------------------------------------------
-MULTI_SEASON_SEASONS: list[str] = ["2019-20", "2020-21", "2021-22", "2022-23", "2023-24"]
-MULTI_SEASON_TARGETS: list[str] = ["2021-22", "2022-23", "2023-24"]
+MULTI_SEASON_SEASONS: list[str] = [
+    f"{year}-{str(year + 1)[-2:]}" for year in range(2010, 2026)
+]   # 2010-11 .. 2025-26
+MULTI_SEASON_TARGETS: list[str] = [
+    f"{year}-{str(year + 1)[-2:]}" for year in range(2013, 2026)
+]   # 2013-14 .. 2025-26 (each has a full 3-season prior window)
 
 
 def league_summary() -> str:
