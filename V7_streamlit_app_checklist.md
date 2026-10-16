@@ -1,7 +1,8 @@
 # V7 - Streamlit draft-day UI: build checklist
 
-Companion to `V7_streamlit_app_prompt.md`. Work top to bottom. Each phase ends in a
-**gate** - do not start the next phase until the gate passes.
+Build checklist for the V7 web UI (see the V7 section of `README.md`). Work top to
+bottom. Each phase ends in a **gate** - do not start the next phase until the gate
+passes.
 
 Rough effort: Phases 1 to 4 are the bulk (an afternoon). Phases 5 and 6 are another couple
 of hours and they are the ones people skip and later regret.
