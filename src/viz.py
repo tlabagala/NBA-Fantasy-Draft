@@ -86,7 +86,8 @@ def plot_projection_accuracy(comparison: dict) -> Path:
         + p9.labs(
             title=f"Projection accuracy, target {comparison['target_season']} "
                   f"(n={comparison['n_common']})",
-            subtitle="Mean absolute error - lower is better. The simple V1 baseline was never beaten.",
+            subtitle="Mean absolute error for one target season - lower is better. "
+                     "Pooled over 13 seasons, V4 aging beats the V1 baseline.",
             x="Method", y="MAE (fantasy points)",
         )
         + p9.theme_minimal()
