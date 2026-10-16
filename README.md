@@ -1,5 +1,7 @@
 # NBA Fantasy Draft Optimiser
 
+[![Tests](https://github.com/tlabagala/NBA-Fantasy-Draft/actions/workflows/tests.yml/badge.svg)](https://github.com/tlabagala/NBA-Fantasy-Draft/actions/workflows/tests.yml)
+
 A draft assistant for a Yahoo head-to-head (H2H) points-format fantasy NBA league
 using a snake draft. It projects each player's season value, builds a ranked draft
 board, simulates the snake draft, and validates the whole thing on past seasons
@@ -10,9 +12,30 @@ This repository is built in strict version order, per
 usability layers beyond the original spec: a live draft-day CLI
 ([V6](#v6---live-draft-assistant-srclive_draftpy)) and a Streamlit web UI over it
 ([V7](#v7---draft-day-web-ui-srcapp_uipy-draft_apppy)). **V1-V7 are all built.**
-The one step that remains is yours: the one-time Yahoo OAuth authorisation that
-switches the pipeline from placeholder league settings to your live ones (see
+The one step that remains is the one-time Yahoo OAuth authorisation that switches
+the pipeline from placeholder league settings to a live league's (see
 [V5](#v5---yahoo-integration-multi-season-distribution-and-presentation)).
+
+## At a glance
+
+| | |
+|---|---|
+| **Problem** | Draft the strongest roster in a 12-team snake draft, using only information available before the season starts |
+| **Approach** | Player projection (prior-season total, then rate x games-played with an aging curve), value over replacement, a draft engine that maximises the *starting lineup*, and a leakage-free backtest over 13 held-out seasons |
+| **Headline result** | **+14.6%** starting-lineup points over a naive "take whoever scored most last season" draft, with the opposing league held fixed - 13 of 13 seasons, 85% of 156 slot-seasons, p = 0.0001 |
+| **What did not work** | Shrinkage (dropped), drafting straight off the value-over-replacement board (-11.8%), and same-board backtests, which turned out to measure nothing (-0.2%, p = 0.96) |
+| **Stack** | Python, pandas, `nba_api`, Parquet, `plotnine`, `pytest` (72 tests), Streamlit, `yfpy` |
+
+```bash
+pip install -r requirements.txt
+python src/main.py          # run every backtest end to end
+streamlit run draft_app.py  # draft-day web UI
+python -m pytest            # 72 tests, no network needed
+```
+
+For the narrative walkthrough start with
+[`project_overview.ipynb`](project_overview.ipynb). The rest of this README is the
+full reference, version by version.
 
 ## Honest framing
 
@@ -246,9 +269,11 @@ the roster. **Decision: V3 is kept** - on the head-to-head evidence, not this ta
 
 **Monte Carlo opponent model: deferred (not built).** The spec makes it optional -
 build it only if the cheap heuristic is shown to leave value on the table, and it
-needs an ADP data source. The heuristic already beats greedy convincingly, so a
-full opponent simulation is not justified yet; it would also introduce a new data
-source better placed alongside the Yahoo work in V5. This is recorded as a
+needs an ADP data source. The heuristic already beats naive drafting decisively
+in the [head-to-head](#head-to-head-holding-the-league-fixed) (+7.8% on the V2
+board, +14.6% on the V4 board), so a full opponent simulation is not justified
+yet; it would also introduce a new data source better placed alongside the Yahoo
+work in V5. This is recorded as a
 deliberate choice, not an omission.
 
 ## V4 - sophisticated projection (aging + shrinkage)
@@ -672,9 +697,18 @@ reference.
 
 ## Setup
 
+Windows:
+
 ```bash
 py -m venv .venv
 .venv/Scripts/python -m pip install -r requirements.txt
+```
+
+macOS / Linux:
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
 ```
 
 ## Configure your league (required before trusting output)
@@ -718,8 +752,11 @@ head-to-head.
 ## Test
 
 ```bash
-.venv/Scripts/python -m pytest
+.venv/Scripts/python -m pytest   # Windows
+.venv/bin/python -m pytest       # macOS / Linux
 ```
+
+The suite needs no network access or cached data, and runs in a few seconds.
 
 - `test_leakage.py` - the V1 projection for season N uses no season-N data, and
   the guard trips under a forced regression.
@@ -797,8 +834,8 @@ than adding Streamlit-specific tests that would need their own maintenance.
   thirteen. Anything measured with all twelve teams on one board should be treated
   as provisional.
 - **Board quality and draft order are not the same thing.** Drafting greedily off
-  the value-over-replacement board is *worse than naive* (-30%) against a league
-  that prices players by last season's totals. VOR belongs inside the engine, not
+  the value-over-replacement board is *worse than naive* (-11.8%, p = 0.026)
+  against a league that prices players by last season's totals. VOR belongs inside the engine, not
   as a ranking - see the head-to-head section.
 - **The draft engine is only as valid as its opponent model.** V3 opponents draft
   greedily (a simple bot); the engine's edge would shrink against smarter
@@ -806,9 +843,11 @@ than adding Streamlit-specific tests that would need their own maintenance.
 - **V3 bench value is not modelled.** Only starters score in the lineup objective,
   so streaming and injury-cover value from the bench is ignored - a real lever in
   H2H that drafting alone does not capture.
-- **A single-season backtest is high variance.** The V5 multi-season distribution
-  is the trustworthy read, and it shows the edge over a competent baseline is small
-  (~3% vs prior-season totals) and loses one season in three.
+- **A single-season backtest is high variance.** Per-season margins in the
+  same-board distribution swing from -20.3% to +19.9%, which is why every verdict
+  here is a 13-season distribution. The trustworthy read is the
+  [head-to-head](#head-to-head-holding-the-league-fixed), averaged over all twelve
+  draft slots.
 - **The live Yahoo path is unexecuted scaffolding** until you complete the OAuth.
   Field names in `yahoo.py` should be verified on the first authorised run.
 - **The ADP benchmark is a proxy** (aging-adjusted ranking), not real draft-position
@@ -856,7 +895,7 @@ src/
                  V7 split out build_board_bundle() (slot-independent, cacheable)
   app_ui.py      V7: Streamlit UI logic - all of it lives here, not in draft_app.py
   main.py        CLI entry point (runs V1-V5, reports every comparison)
-tests/           16 test modules, 72 tests (see the Test section)
+tests/           14 test modules, 72 tests (see the Test section)
 project_overview.ipynb   high-level walkthrough with charts
 .env.example     Yahoo credential template (copy to git-ignored .env)
 data/            Parquet cache (git-ignored, disposable)
@@ -873,11 +912,12 @@ outputs/         rendered charts + live_draft_state.json (git-ignored, re-render
 | Did a more sophisticated projection help *accuracy*? | **Yes** - V4 aging beats V1 pooled (501.8 vs 508.9 over 13 targets) |
 | Did that better projection help the *draft*? | **Yes, but only via the engine** - +14.6% with it, +7.8% on the V2 board |
 | Did a smarter draft engine help? | **Yes** - the only component that beats naive at all |
-| Is the VOR board a draft order? | **No** - greedy off VOR is **-30%**, worse than naive |
+| Is the VOR board a draft order? | **No** - greedy off VOR is **-11.8%** (p = 0.026), worse than naive |
 | Did the aging curve help? | **Yes** vs V2 (kept). Shrinkage did **not** (dropped) |
 
-The pattern worth taking away: **the decision engine paid off, the fancier
-projections did not.** Roster construction beat forecasting on this problem - and
-the head-to-head sharpens it further: the projection and scarcity work only pays
-off when the *engine* consumes it. Used directly as a draft order, it loses badly to
-"take whoever scored most last season".
+The pattern worth taking away: **the decision engine is what pays off.** It is the
+only component that beats naive drafting on its own, and roster construction
+mattered more than forecasting on this problem. The projection and scarcity work
+still earns its place, but only when the *engine* consumes it - the V4 board nearly
+doubles the engine's edge (+14.6% vs +7.8%). Used directly as a draft order, the
+same work loses to "take whoever scored most last season".
