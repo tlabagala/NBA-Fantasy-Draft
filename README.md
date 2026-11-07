@@ -7,8 +7,8 @@ using a snake draft. It projects each player's season value, builds a ranked dra
 board, simulates the snake draft, and validates the whole thing on past seasons
 without data leakage.
 
-This repository is built in strict version order, per
-[`nba_draft_optimiser_masterdoc.md`](nba_draft_optimiser_masterdoc.md), plus two
+This repository was built in strict version order - V1 first, each later version
+adding one layer only if it earned its place - plus two
 usability layers beyond the original spec: a live draft-day CLI
 ([V6](#v6---live-draft-assistant-srclive_draftpy)) and a Streamlit web UI over it
 ([V7](#v7---draft-day-web-ui-srcapp_uipy-draft_apppy)). **V1-V7 are all built.**
@@ -101,7 +101,7 @@ One consequence worth stating plainly: **V1 *is* the naive baseline** (its
 projection is the prior-season total), so there is no "V1 versus baseline" margin
 to report - it is the reference, and the meaningful margins start at V2.
 
-> **Deviation from the spec, recorded.** The masterdoc (Section 3, rule 2) names
+> **Deviation from the spec, recorded.** The original build spec names
 > *random* as V1's naive draft and prior-season-totals only "later". Random was
 > kept as V1's baseline long enough to show it is uninformative - a +153% margin
 > that means nothing - so the reference was moved down to the naive model the same

@@ -41,3 +41,7 @@ Thumbs.db
 
 # --- Jupyter (if used for exploration) ---
 .ipynb_checkpoints/
+
+# --- Local-only planning notes ---
+nba_draft_optimiser_masterdoc.md
+V7_streamlit_app_checklist.md

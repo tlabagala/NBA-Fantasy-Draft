@@ -96,7 +96,7 @@ def test_v2_margin_is_measured_against_the_naive_baseline(
 
 
 def test_backtest_v1_alias_still_resolves(synthetic_totals: pd.DataFrame) -> None:
-    """The masterdoc's V1 contract still has a name; V1's draft IS the baseline."""
+    """The original spec's V1 contract still has a name; V1's draft IS the baseline."""
     assert backtest_mod.backtest_v1 is backtest_mod.backtest_naive_baseline
     result = backtest_mod.backtest_v1(synthetic_totals, "2023-24", _league())
     assert result["naive_total"] > 0

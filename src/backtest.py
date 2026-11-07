@@ -254,7 +254,7 @@ def backtest_naive_baseline(totals: pd.DataFrame, target_season: str, league) ->
     }
 
 
-# Historical name kept so the masterdoc's V1 contract still resolves. V1's draft is
+# Historical name kept so the original spec's V1 contract still resolves. V1's draft is
 # the naive baseline, so the two are the same run under two names.
 backtest_v1 = backtest_naive_baseline
 
