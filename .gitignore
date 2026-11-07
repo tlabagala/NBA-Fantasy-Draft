@@ -45,3 +45,7 @@ Thumbs.db
 # --- Local-only planning notes ---
 nba_draft_optimiser_masterdoc.md
 V7_streamlit_app_checklist.md
+
+# --- Local agent tooling (links into .venv) ---
+.agents/
+.claude/
