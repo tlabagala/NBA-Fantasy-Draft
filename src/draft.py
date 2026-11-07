@@ -274,6 +274,7 @@ def snake_draft_vs_fixed_opponents(
     league,
     strategy: str = "smart",
     run_risk_weight: float | None = None,
+    opponent_strategy: str = "greedy",
 ) -> list[int]:
     """Draft MY roster while every opponent drafts greedily off a DIFFERENT board.
 
@@ -301,19 +302,28 @@ def snake_draft_vs_fixed_opponents(
         strategy: ``"smart"`` (the V3 engine) or ``"greedy"`` (best available off
             ``my_board``).
         run_risk_weight: overrides ``league.RUN_RISK_WEIGHT`` when given.
+        opponent_strategy: how the opponents draft off ``opponent_board`` -
+            ``"greedy"`` (best available, the casual drafter) or ``"smart"`` (each
+            opponent runs the same V3 engine on their own roster). Use ``"smart"``
+            to ask the question that actually threatens the engine's result: does
+            the edge survive against opponents who are not wasting picks on depth
+            they cannot start?
 
     Returns:
         My roster as a list of player ids, in the order I picked them.
 
     Note:
-        Opponents are still non-reactive - they never respond to what I take. This
-        is a better opponent model than "everyone runs my strategy", not a good one;
-        the binding constraint from V3 still applies.
+        Even ``opponent_strategy="smart"`` opponents are non-adaptive: they optimise
+        their own lineup but never model what anyone else will do, exactly as I do.
+        That is a far sharper opponent than greedy, still not a real one.
     """
     if my_slot < 1 or my_slot > n_teams:
         raise ValueError(f"my_slot {my_slot} must be within 1..{n_teams}.")
     if strategy not in {"smart", "greedy"}:
         raise ValueError(f"Unknown strategy {strategy!r}; expected 'smart' or 'greedy'.")
+    if opponent_strategy not in {"smart", "greedy"}:
+        raise ValueError(f"Unknown opponent_strategy {opponent_strategy!r}; "
+                         f"expected 'smart' or 'greedy'.")
 
     order = snake_pick_order(n_teams, roster_size)
     gaps = _gaps_to_next_my_pick(order, my_slot)
@@ -324,15 +334,34 @@ def snake_draft_vs_fixed_opponents(
     position_by_id = {pid: position_map.get(pid, pos_mod.UNKNOWN_POSITION)
                       for pid in set(my_pref) | set(opponent_pref)}
 
+    opponent_values = dict(zip(opponent_board[C.COL_PLAYER_ID],
+                               opponent_board[C.COL_PROJECTED_PTS]))
+    # Each opponent needs its OWN pick-gap schedule when it drafts smart, because
+    # positional-run risk depends on how long until that team picks again.
+    gaps_by_team = ({slot: _gaps_to_next_my_pick(order, slot)
+                     for slot in range(1, n_teams + 1)}
+                    if opponent_strategy == "smart" else {})
+
     taken: set[int] = set()
-    my_roster: list[int] = []
+    rosters: dict[int, list[int]] = {slot: [] for slot in range(1, n_teams + 1)}
+    my_roster = rosters[my_slot]
 
     for idx, team_slot in enumerate(order):
         if team_slot != my_slot:
-            for pid in opponent_pref:            # greedy opponent off the fixed board
-                if pid not in taken:
-                    taken.add(pid)
-                    break
+            if opponent_strategy == "greedy":
+                pick = next((pid for pid in opponent_pref if pid not in taken), None)
+            else:
+                available = [pid for pid in opponent_pref if pid not in taken]
+                if not available:
+                    continue
+                ranked = rank_candidates(
+                    available, rosters[team_slot], opponent_values, position_by_id,
+                    league, gaps_by_team[team_slot].get(idx, 0), run_risk_weight)
+                pick = ranked[0][0]
+            if pick is None:
+                continue
+            taken.add(pick)
+            rosters[team_slot].append(pick)
             continue
 
         available = [pid for pid in my_pref if pid not in taken]

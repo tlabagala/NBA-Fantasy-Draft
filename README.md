@@ -453,6 +453,53 @@ Caveat: opponents are non-reactive - they never adjust to what I take. This is a
 better opponent model than "everyone runs my strategy", not a good one, and it is
 the remaining reason to treat +14.6% as an upper bound rather than a forecast.
 
+### Opponent quality: what the +14.6% is actually measuring
+
+The head-to-head above holds the league fixed at **casual** opponents - eleven teams
+drafting best-available off last season's totals, never reacting. That is the right
+model for a typical Yahoo league, but the result is conditional on it, and
+`opponent_strategy="smart"` on
+[`snake_draft_vs_fixed_opponents`](src/draft.py) lets that assumption be tested
+directly: every opponent then runs the same V3 engine on their own roster, with
+their own pick-gap schedule.
+
+My edge over drafting naively into the **same** league, 13 seasons x 4 slots:
+
+| My version | vs casual (naive, greedy) | vs good board (V4, greedy) | vs fully sharp (V4 + engine) |
+|---|---|---|---|
+| V4 board, greedy | -2.0% (7/13) | -3.7% (3/13) | **-29.4% (0/13)** |
+| **Engine on naive board** | **+1.5% (9/13)** | **+6.4% (12/13)** | **+3.7% (10/13)** |
+| Engine on V4 board *(shipped)* | **+14.2% (13/13)** | -3.5% (3/13) | -4.2% (2/13) |
+
+**The headline edge is mostly an information advantage, not the decision rule.**
+The shipped stack's +14.6% collapses to -3.5% as soon as opponents hold the same
+board. That margin was substantially "my projections are better than theirs", not
+"my engine is better than theirs" - when everyone values players identically nobody
+can gain from the valuation, and you are all chasing the same players.
+
+**What survives every opponent model is the engine on a *differentiated* board.**
+Running the V3 engine on the naive projection wins in all three leagues (+1.5%,
++6.4%, +3.7%) with notably low variance (sd 2.6, 8.3, 4.8). That is the
+opponent-robust claim: *the marginal-lineup-value engine adds a small, consistent
+edge regardless of opponent quality; the board advantage adds a lot, but only while
+opponents lack it.*
+
+Note also the worst cell in the table. A good board used **without** the engine,
+against opponents using that same board **with** it, is **-29.4%, losing all 13
+seasons**. Having good projections and treating them as a draft order is the single
+most damaging thing measured anywhere in this project.
+
+**So read the headline as conditional.** +14.6% is the edge over a league drafting
+by last season's totals - which is a realistic description of most casual leagues,
+and the case the tool is built for. It is not an edge over a league that has also
+done this work.
+
+Caveats: this ran at 4 draft slots rather than 12 (smart opponents mean 143 engine
+picks per draft, so 13 seasons took ~15 minutes), making the cells noisier than the
+12-slot numbers above, though the effect sizes are large and consistent across all
+13 seasons. And even "fully sharp" opponents are non-adaptive - they optimise their
+own lineups but never model what anyone else will do, exactly as I do.
+
 ### What sets the starting lineup (and why it barely matters)
 
 Scoring a roster means picking its best legal starting lineup and summing those
@@ -837,9 +884,14 @@ than adding Streamlit-specific tests that would need their own maintenance.
   the value-over-replacement board is *worse than naive* (-11.8%, p = 0.026)
   against a league that prices players by last season's totals. VOR belongs inside the engine, not
   as a ranking - see the head-to-head section.
-- **The draft engine is only as valid as its opponent model.** V3 opponents draft
-  greedily (a simple bot); the engine's edge would shrink against smarter
-  opponents. A full Monte Carlo opponent model is deferred (see the V3 section).
+- **The headline edge is conditional on opponent quality, and this is now measured
+  rather than assumed.** +14.6% is against opponents drafting by last season's
+  totals. Give them the same board and it becomes -3.5%. Only the engine on a
+  differentiated board wins against every opponent model tested. See
+  [Opponent quality](#opponent-quality-what-the-146-is-actually-measuring).
+- **Opponents are still non-adaptive** even in the sharp condition: they optimise
+  their own lineups but never model what anyone else will do. A full Monte Carlo
+  opponent model remains deferred (see the V3 section).
 - **V3 bench value is not modelled.** Only starters score in the lineup objective,
   so streaming and injury-cover value from the bench is ignored - a real lever in
   H2H that drafting alone does not capture.
@@ -906,7 +958,9 @@ outputs/         rendered charts + live_draft_state.json (git-ignored, re-render
 
 | Question | Answer |
 |---|---|
-| Does it beat the naive baseline, league held fixed? | **Yes, +14.6%**, 13/13 seasons, 85% of slot-seasons, p = 0.0001 - the number to trust |
+| Does it beat a **casual** league (drafting by last season's totals)? | **Yes, +14.6%**, 13/13 seasons, p = 0.0001 - the realistic case, and what the tool is for |
+| Does it beat a league that has done the same work? | **No - -3.5%.** Most of the edge was an information advantage, not the engine |
+| What survives every opponent model? | The engine on a *differentiated* board: +1.5% / +6.4% / +3.7% across casual, good-board and sharp leagues |
 | Does it beat naive when the whole league upgrades too? | **No - -0.2%**, p = 0.96. That experiment measures nothing |
 | Does it clear the random floor? | Yes - +153%, 13/13 seasons, but that is a wiring check, not a result |
 | Did a more sophisticated projection help *accuracy*? | **Yes** - V4 aging beats V1 pooled (501.8 vs 508.9 over 13 targets) |

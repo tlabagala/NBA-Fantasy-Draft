@@ -310,7 +310,16 @@ def project_v4(
         One row per player with ``PROJECTED_PPG`` (adjusted), ``PROJECTED_GP`` and
         ``PROJECTED_PTS``. Carries ``n_unknown_age`` in ``.attrs``.
     """
-    base = project_v2(totals, target_season)
+    # Take the recency window from ``league``, not from the literal config module.
+    # Line below used to call project_v2(totals, target_season) with no override, so
+    # the base projection silently ignored the league object while the shrinkage
+    # window (next line) respected it - the same league could be described by two
+    # different windows in one call. It also meant a caller passing a custom league
+    # (src/app_ui.py's setup screen, every test double) could not actually change the
+    # projection window.
+    base = project_v2(totals, target_season,
+                      n_seasons=league.N_PROJECTION_SEASONS,
+                      gp_decay=league.GP_RECENCY_DECAY)
 
     window = recent_prior_seasons(totals, target_season, league.N_PROJECTION_SEASONS)
     window_totals = totals.loc[totals[C.COL_SEASON].isin(window)]

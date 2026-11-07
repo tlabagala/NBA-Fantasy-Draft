@@ -253,3 +253,64 @@ def test_invalid_slots_are_rejected() -> None:
             backtest_mod.head_to_head_backtest(
                 totals, bios, ["2023-24"], league, positions_for=lambda s: pos,
                 variants=(("V3", "v2", "smart"),), slots=bad)
+
+
+def test_smart_opponents_still_produce_a_legal_draft() -> None:
+    """Opponents running the engine themselves must not break the bookkeeping.
+
+    With `opponent_strategy="smart"` every opponent tracks its own roster and picks
+    through `rank_candidates`, so there are eleven more places a duplicate or a
+    dropped pick could appear.
+    """
+    league = _league()
+    ids = list(range(1, 41))
+    pos = _position_map(ids)
+    opponent_board = _board(ids, [float(500 - 10 * i) for i in range(len(ids))])
+    my_board = _board(ids, [float(500 - 10 * i) for i in range(len(ids))])
+
+    for my_strategy in ("greedy", "smart"):
+        roster = draft_mod.snake_draft_vs_fixed_opponents(
+            my_board, opponent_board, league.NUM_TEAMS, league.ROSTER_SIZE,
+            league.MY_DRAFT_SLOT, pos, league, strategy=my_strategy,
+            opponent_strategy="smart",
+        )
+        assert len(roster) == league.ROSTER_SIZE, my_strategy
+        assert len(set(roster)) == len(roster), f"{my_strategy} drafted a duplicate"
+
+
+def test_smart_opponents_change_what_is_left_for_me() -> None:
+    """Sharper opponents must actually draft differently, or the test is vacuous.
+
+    The difference only shows on a board where lineup construction bites, so the
+    top of this one is stacked with guards: a greedy opponent keeps taking guards
+    it cannot start, while an engine opponent diversifies. On a board with talent
+    spread evenly across positions the two rules can coincide exactly, which is a
+    correct outcome and simply not a discriminating test.
+    """
+    league = _league()
+    ids = list(range(1, 41))
+    # Top 15 are all guards; only one G starting slot plus a flex, so greedy
+    # opponents stockpile guards they can never field.
+    pos = {pid: ("G" if pid <= 15 else _POSITIONS[pid % 3]) for pid in ids}
+    board = _board(ids, [float(500 - 10 * i) for i in range(len(ids))])
+
+    kwargs = dict(n_teams=league.NUM_TEAMS, roster_size=league.ROSTER_SIZE,
+                  my_slot=league.MY_DRAFT_SLOT, position_map=pos, league=league,
+                  strategy="smart")
+    vs_greedy = draft_mod.snake_draft_vs_fixed_opponents(
+        board, board, opponent_strategy="greedy", **kwargs)
+    vs_smart = draft_mod.snake_draft_vs_fixed_opponents(
+        board, board, opponent_strategy="smart", **kwargs)
+
+    assert vs_greedy != vs_smart
+
+
+def test_invalid_opponent_strategy_is_rejected() -> None:
+    league = _league()
+    ids = list(range(1, 41))
+    board = _board(ids, [float(500 - 10 * i) for i in range(len(ids))])
+    with pytest.raises(ValueError, match="opponent_strategy"):
+        draft_mod.snake_draft_vs_fixed_opponents(
+            board, board, league.NUM_TEAMS, league.ROSTER_SIZE,
+            league.MY_DRAFT_SLOT, _position_map(ids), league,
+            opponent_strategy="adaptive")
