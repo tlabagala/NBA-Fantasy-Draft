@@ -51,11 +51,11 @@ SCORING: dict[str, float] = {
     C.COL_FG3M: 1.5,    # made three-pointer (bonus on top of PTS)
     C.COL_FG3A: -0.25,  # three-point attempt (penalty)
     C.COL_PTS: 1.0,     # points
-    C.COL_REB: 1.25,    # total rebounds
-    C.COL_AST: 1.5,     # assists
-    C.COL_STL: 2.0,     # steals
-    C.COL_BLK: 1.5,     # blocks
-    C.COL_TOV: -1.0,    # turnovers (penalty)
+    C.COL_REB: 1.5,    # total rebounds
+    C.COL_AST: 2.0,     # assists
+    C.COL_STL: 2.5,     # steals
+    C.COL_BLK: 2.0,     # blocks
+    C.COL_TOV: -0.5,    # turnovers (penalty)
     # TODO: Double-double (DD, 2.5) and triple-double (TD, 3.0) are part of the
     # Yahoo formula but are DERIVED, not raw nba_api columns. They are omitted
     # here because _validate_scoring_keys would reject them. To add them:
@@ -79,7 +79,7 @@ NUM_TEAMS: int = 12
 ROSTER_SLOTS: dict[str, int] = {
     "PG": 1, "SG": 1, "SF": 1, "PF": 1, "C": 1,
     "G": 1, "F": 1, "UTIL": 3,   # 10 starters
-    "BN": 3,                       # 3 bench
+    "BN": 5,                       # 5 bench
     # "IL": 0,  # injured-list slots are not drafted; leave out of the draftable count
 }
 
